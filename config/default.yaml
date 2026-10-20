@@ -24,6 +24,12 @@ statistics:
   bootstrap:
     block_days: 20      # block length for the stationary block bootstrap (section 5)
     resamples: 500      # bootstrap resamples (section 5)
+  rolling_bars: 756     # 3 trading years (3 * 252) for the rolling matrix next to the full fit (Fix 4)
+  ew_half_life: 250     # ~1 trading year half-life for exponentially weighted transition counts (Fix 4)
+  shrinkage_alpha: 20   # Dirichlet pseudo-counts per row, ~1 month of daily transitions (Fix 4)
+  mixing_epsilon: 0.01  # mixing time stops when every row of P^n is within 1pp TVD of the stationary vector
+  homogeneity_periods: 2  # two halves of the ~125-label stride sequence keep enough transitions per row for the chi-square approximation (Fix 4)
+  seed: 0               # explicit RNG seed for every null model and bootstrap; change to check sensitivity
 
 costs:                  # per-side bps; overridden per universe via cost_profile (section 5)
   profiles:

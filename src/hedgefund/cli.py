@@ -81,6 +81,20 @@ def analyze_command(
     no_hmm: Annotated[
         bool, typer.Option("--no-hmm", help="Skip the HMM fit even if hmmlearn is available")
     ] = False,
+    null_paths: Annotated[
+        int | None,
+        typer.Option("--null-paths", help="Null-model paths (override config for fast runs)"),
+    ] = None,
+    bootstrap_resamples: Annotated[
+        int | None,
+        typer.Option(
+            "--bootstrap-resamples",
+            help="Block-bootstrap resamples (override config for fast runs)",
+        ),
+    ] = None,
+    seed: Annotated[
+        int | None, typer.Option("--seed", help="RNG seed for null models and the bootstrap")
+    ] = None,
     json_output: Annotated[
         bool, typer.Option("--json", help="Emit the analyze() dict as JSON to stdout, nothing else")
     ] = False,
@@ -102,6 +116,15 @@ def analyze_command(
             min_train if min_train is not None else _config_value(cfg, "backtest", "min_train")
         )
         return_type = str(_config_value(cfg, "labelling", "return_type"))
+        null_paths_used = int(
+            null_paths if null_paths is not None else _config_value(cfg, "statistics", "null_paths")
+        )
+        resamples_used = int(
+            bootstrap_resamples
+            if bootstrap_resamples is not None
+            else _config_value(cfg, "statistics", "bootstrap", "resamples")
+        )
+        seed_used = int(seed if seed is not None else _config_value(cfg, "statistics", "seed"))
 
         close, source = _load_close(ticker, csv, years_used, json_output)
         result = analyze(
@@ -112,6 +135,15 @@ def analyze_command(
             min_train=min_train_used,
             hmm=not no_hmm,
             return_type=return_type,
+            null_paths=null_paths_used,
+            bootstrap_resamples=resamples_used,
+            block_days=int(_config_value(cfg, "statistics", "bootstrap", "block_days")),
+            rolling_bars=int(_config_value(cfg, "statistics", "rolling_bars")),
+            ew_half_life=float(_config_value(cfg, "statistics", "ew_half_life")),
+            shrinkage_alpha=float(_config_value(cfg, "statistics", "shrinkage_alpha")),
+            mixing_epsilon=float(_config_value(cfg, "statistics", "mixing_epsilon")),
+            homogeneity_periods=int(_config_value(cfg, "statistics", "homogeneity_periods")),
+            seed=seed_used,
         )
     except Exception as exc:
         if json_output:

@@ -20,7 +20,13 @@ import pandas as pd
 import pytest
 
 from hedgefund.backtest.walk_forward import run_walk_forward
-from hedgefund.regime.labels import label_regimes
+from hedgefund.regime.labels import (
+    ensemble_label_regimes,
+    ew_label_regimes,
+    hysteresis_label_regimes,
+    label_regimes,
+    zscore_label_regimes,
+)
 
 N_DAYS = 600
 MIN_TRAIN = 60  # small training window so the walk-forward emits plenty of decisions
@@ -76,9 +82,40 @@ def _walk_forward(close: pd.Series) -> dict[str, pd.Series]:
     }
 
 
+# Alternative labellers (Phase 2, Fix 3). Each must have at least one knowable value at
+# the first cut (close index MIN_TRAIN + WINDOW + 1 = 81): zscore uses vol_window=WINDOW so
+# its first label is at index 20; the ensemble's longest window (60) is also before 81.
+ENSEMBLE_WINDOWS = (5, 10, 20, 60)
+HYSTERESIS_EXIT = THRESHOLD / 2  # exit must sit strictly inside the entry threshold
+
+
+def _zscore_labels(close: pd.Series) -> dict[str, pd.Series]:
+    return {"labels": zscore_label_regimes(close, window=WINDOW, vol_window=WINDOW)}
+
+
+def _ew_labels(close: pd.Series) -> dict[str, pd.Series]:
+    return {"labels": ew_label_regimes(close, window=WINDOW, threshold=THRESHOLD)}
+
+
+def _ensemble_labels(close: pd.Series) -> dict[str, pd.Series]:
+    return {"labels": ensemble_label_regimes(close, windows=ENSEMBLE_WINDOWS, threshold=THRESHOLD)}
+
+
+def _hysteresis_labels(close: pd.Series) -> dict[str, pd.Series]:
+    return {
+        "labels": hysteresis_label_regimes(
+            close, window=WINDOW, enter_threshold=THRESHOLD, exit_threshold=HYSTERESIS_EXIT
+        )
+    }
+
+
 ESTIMATORS: list[tuple[str, Estimator]] = [
     ("label_regimes", _labels),
     ("walk_forward_sign_rule", _walk_forward),
+    ("zscore_label_regimes", _zscore_labels),
+    ("ew_label_regimes", _ew_labels),
+    ("ensemble_label_regimes", _ensemble_labels),
+    ("hysteresis_label_regimes", _hysteresis_labels),
 ]
 
 

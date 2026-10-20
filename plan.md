@@ -84,7 +84,7 @@ Each fix below names the root cause, what we will implement, how we prove it wor
 
 **What we implement.**
 - *Stride counting.* Count transitions only between labels w bars apart (t → t+w), so the two windows do not overlap. Report this as the primary matrix.
-- *Run-length persistence.* Treat each regime as an episode. Estimate persistence as 1 − 1 / (mean episode length in bars). For a true first-order chain the episode length is geometric, so this gives the same answer as counting but is not inflated by overlap.
+- *Run-length persistence.* Treat each regime as an episode. Estimate persistence as 1 − 1 / (mean episode length in bars). For a true first-order chain the episode length is geometric, so this gives the same answer as counting. Phase 2 finding: on the daily sequence it is algebraically the overlapping diagonal (same exits-per-visit ratio), so it is only overlap-free when computed on the stride-subsampled labels, where it equals the stride diagonal up to the censored last run. Reported on the stride sequence; do not treat it as an independent estimator.
 - *Labeller-induced null.* Simulate iid returns with the asset's mean and volatility, run the identical 20-day labeller on them, and estimate the matrix. The diagonal this produces is the amount of "persistence" the labeller manufactures on its own. Report excess persistence = real − labeller-null, with a bootstrap interval.
 - *Anderson-Goodman test.* The classical chi-square test of first-order Markov dependence against independence, applied to the stride-sampled sequence. Report the p-value so the Markov claim is tested rather than assumed.
 - *Effective sample size.* For the overlapping matrix, use n / w as the effective count when building confidence intervals.
@@ -311,25 +311,25 @@ Progress key: `[x]` done, `[ ]` not started. Each phase ends with an acceptance 
 
 ### Phase 2 — Honest statistics (1–2 days)
 
-- [ ] Add stride (non-overlapping) transition counting as an option in `regime/markov.py`.
-- [ ] Add effective-sample-size estimate for overlapping counts.
-- [ ] Add label-shuffle null model: refit on shuffled labels N times, report the diagonal's percentile.
-- [ ] Add iid null model with the same marginal regime frequencies.
-- [ ] Add block-bootstrap confidence intervals for every matrix cell and the stationary vector.
-- [ ] Add rolling-window matrix fits (configurable, default 3 years) alongside the full-history fit.
-- [ ] Add a drift metric between rolling and full-history matrices.
-- [ ] Add mixing time: steps until `P**n` is within ε of the stationary vector.
-- [ ] Add run-length persistence estimator (1 − 1 / mean episode length) next to the stride estimate. (Fix 1)
-- [ ] Add the labeller-induced null: iid returns with matched mean and vol, same labeller, report excess persistence with CI. (Fix 1)
-- [ ] Add the Anderson-Goodman chi-square test of first-order dependence on the stride sequence. (Fix 1)
-- [ ] Add exponentially weighted transition counts with a configurable half-life. (Fix 4)
-- [ ] Add Dirichlet shrinkage of rolling counts toward the full-history matrix. (Fix 4)
-- [ ] Add the chi-square homogeneity test across sub-periods, reported as matrix stability. (Fix 4)
-- [ ] Add alternative labellers: z-score threshold, exponentially weighted return, multi-window ensemble, hysteresis with min-hold. (Fix 3)
-- [ ] Test: on a synthetic chain whose matrix changes halfway, EW and rolling estimates track the change and the full-history estimate does not. (Fix 4)
-- [ ] Extend the JSON contract with `stride_matrix`, `null_percentile`, `confidence_intervals`, `rolling_matrix`, `mixing_time`.
-- [ ] Test: on an iid synthetic series the overlapping diagonal is inflated and the stride diagonal is not.
-- [ ] Test: bootstrap CIs contain the true matrix on a synthetic chain at the nominal rate.
+- [x] Add stride (non-overlapping) transition counting as an option in `regime/markov.py`.
+- [x] Add effective-sample-size estimate for overlapping counts.
+- [x] Add label-shuffle null model: refit on shuffled labels N times, report the diagonal's percentile.
+- [x] Add iid null model with the same marginal regime frequencies.
+- [x] Add block-bootstrap confidence intervals for every matrix cell and the stationary vector.
+- [x] Add rolling-window matrix fits (configurable, default 3 years) alongside the full-history fit.
+- [x] Add a drift metric between rolling and full-history matrices.
+- [x] Add mixing time: steps until `P**n` is within ε of the stationary vector.
+- [x] Add run-length persistence estimator (1 − 1 / mean episode length) next to the stride estimate. (Fix 1)
+- [x] Add the labeller-induced null: iid returns with matched mean and vol, same labeller, report excess persistence with CI. (Fix 1)
+- [x] Add the Anderson-Goodman chi-square test of first-order dependence on the stride sequence. (Fix 1)
+- [x] Add exponentially weighted transition counts with a configurable half-life. (Fix 4)
+- [x] Add Dirichlet shrinkage of rolling counts toward the full-history matrix. (Fix 4)
+- [x] Add the chi-square homogeneity test across sub-periods, reported as matrix stability. (Fix 4)
+- [x] Add alternative labellers: z-score threshold, exponentially weighted return, multi-window ensemble, hysteresis with min-hold. (Fix 3)
+- [x] Test: on a synthetic chain whose matrix changes halfway, EW and rolling estimates track the change and the full-history estimate does not. (Fix 4)
+- [x] Extend the JSON contract with `stride_matrix`, `null_percentile`, `confidence_intervals`, `rolling_matrix`, `mixing_time`.
+- [x] Test: on an iid synthetic series the overlapping diagonal is inflated and the stride diagonal is not.
+- [x] Test: bootstrap CIs contain the true matrix on a synthetic chain at the nominal rate.
 
 **Gate:** the SPY report shows both diagonals side by side with the gap explained, and the null percentile is computed.
 
