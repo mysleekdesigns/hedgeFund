@@ -125,7 +125,7 @@ def test_hmm_available_block(companion: dict) -> None:
         "caveat": "local maxima",
     }
     text = render(with_hmm)
-    assert "Hidden Markov Model (Baum-Welch + Viterbi):\n" in text
+    assert "Hidden Markov Model (Baum-Welch, walk-forward filtered):\n" in text
     assert "  Bear      (latent state 2): -0.123% mean daily return\n" in text
     assert "  Sideways  (latent state 0): +0.030% mean daily return\n" in text
     assert "  Bull      (latent state 1): +0.210% mean daily return\n" in text
@@ -507,3 +507,227 @@ def test_print_backtest_writes_render_backtest_verbatim(capsys: pytest.CaptureFi
     slim = backtest_only(_synthetic_close(), source="synthetic", null_paths=FAST_NULL_PATHS)
     print_backtest(slim)
     assert capsys.readouterr().out == render_backtest(slim)
+
+
+# --------------------------------------------------------------------------- #
+# Phase 4: the extended ``hmm`` block
+# --------------------------------------------------------------------------- #
+def _phase4_hmm() -> dict:
+    return {
+        "available": True,
+        "regimes": [
+            {"label": "Bear", "latent_state": 0, "mean_daily_return": -0.002},
+            {"label": "Sideways", "latent_state": 1, "mean_daily_return": 0.0001},
+            {"label": "Bull", "latent_state": 2, "mean_daily_return": 0.0015},
+        ],
+        "caveat": "local maxima",
+        "features": {
+            "names": ["log_return", "vol_10", "vol_20"],
+            "vol_short": 10,
+            "vol_long": 20,
+            "standardisation": "training-window statistics only (plan Fix 5)",
+        },
+        "fit": {
+            "seed": 1,
+            "seeds": [0, 1, 2],
+            "log_likelihood": -1234.5678,
+            "emission": "gaussian",
+            "converged": True,
+        },
+        "filtered_probabilities": {"bear": 0.7, "sideways": 0.25, "bull": 0.05},
+        "decision": {
+            "regime": "Bear",
+            "raw_regime": "Bear",
+            "enter": 0.6,
+            "exit": 0.4,
+            "confirm_bars": 2,
+            "rule": "hysteresis",
+        },
+        "walk_forward": {"n_days": 380, "n_refits": 4},
+        "agreement_with_threshold": {"n": 380, "share_agree": 0.6123},
+        "first_to_flip": {
+            "bear": {
+                "hmm_first": 3,
+                "threshold_first": 1,
+                "same_bar": 0,
+                "mean_lead_bars": 4.25,
+                "hmm_unmatched": 2,
+                "threshold_unmatched": 1,
+            },
+            "bull": {
+                "hmm_first": 0,
+                "threshold_first": 2,
+                "same_bar": 1,
+                "mean_lead_bars": -1.5,
+                "hmm_unmatched": 0,
+                "threshold_unmatched": 0,
+            },
+            "match_window": 20,
+        },
+        "note": "walk-forward, filtered not smoothed",
+    }
+
+
+def test_phase4_hmm_block_renders_every_line(companion: dict) -> None:
+    with_hmm = copy.deepcopy(companion)
+    with_hmm["hmm"] = _phase4_hmm()
+    text = render(with_hmm)
+    assert "  Bear      (latent state 0): -0.200% mean daily return\n" in text
+    assert "  Note: local maxima\n" in text
+    assert (
+        "  Features: log_return, vol_10, vol_20 (vol windows 10/20; standardised with "
+        "training-window statistics only (plan Fix 5))\n"
+    ) in text
+    assert (
+        "  Fit: best seed 1 of restarts [0, 1, 2] | log-likelihood -1234.57 | "
+        "emission gaussian | converged True\n"
+    ) in text
+    assert (
+        "  Decision: Bear (raw argmax Bear) | filtered Bear 70.00% Sideways 25.00% "
+        "Bull 5.00% | enter 0.60 exit 0.40 confirm 2 bars\n"
+    ) in text
+    assert "  Walk-forward: 380 decision days, 4 refits on past data only\n" in text
+    assert "  Agreement with the threshold labeller: 61.23% of 380 common days\n" in text
+    assert "  First to flip (matched within +/-20 bars; lead > 0 = HMM earlier):\n" in text
+    assert (
+        "    into Bear  HMM first 3 | threshold first 1 | same bar 0 | mean lead 4.2 bars | "
+        "unmatched HMM 2, threshold 1\n"
+    ) in text
+    assert (
+        "    into Bull  HMM first 0 | threshold first 2 | same bar 1 | mean lead -1.5 bars | "
+        "unmatched HMM 0, threshold 0\n"
+    ) in text
+    assert "  Note: walk-forward, filtered not smoothed\n" in text
+
+
+def test_phase4_hmm_lines_sit_between_the_caveat_and_the_honest_statistics(
+    full_result: dict,
+) -> None:
+    with_hmm = copy.deepcopy(full_result)
+    with_hmm["hmm"] = _phase4_hmm()
+    text = render(with_hmm)
+    caveat_at = text.index("  Note: local maxima\n")
+    features_at = text.index("  Features: ")
+    flip_at = text.index("  First to flip ")
+    honest_at = text.index(HONEST_HEADER)
+    assert caveat_at < features_at < flip_at < honest_at
+
+
+def test_phase4_hmm_none_values_render_as_na(companion: dict) -> None:
+    with_hmm = copy.deepcopy(companion)
+    hmm = _phase4_hmm()
+    hmm["agreement_with_threshold"] = {"n": 0, "share_agree": None}
+    hmm["first_to_flip"]["bear"]["mean_lead_bars"] = None
+    hmm["fit"]["log_likelihood"] = None
+    hmm["walk_forward"]["n_refits"] = None
+    with_hmm["hmm"] = hmm
+    text = render(with_hmm)
+    assert "  Agreement with the threshold labeller: n/a of 0 common days\n" in text
+    assert "mean lead n/a bars" in text
+    assert "log-likelihood n/a" in text
+    assert "380 decision days, n/a refits" in text
+
+
+def test_companion_only_hmm_dict_renders_no_phase4_lines(companion: dict) -> None:
+    with_hmm = copy.deepcopy(companion)
+    with_hmm["hmm"] = {
+        "available": True,
+        "regimes": [
+            {"label": "Bear", "latent_state": 2, "mean_daily_return": -0.0012345},
+            {"label": "Sideways", "latent_state": 0, "mean_daily_return": 0.0003},
+            {"label": "Bull", "latent_state": 1, "mean_daily_return": 0.0021},
+        ],
+        "caveat": "local maxima",
+    }
+    text = render(with_hmm)
+    assert "  Note: local maxima\n" in text
+    assert "  Features: " not in text
+    assert "  First to flip " not in text
+
+
+def test_real_phase4_hmm_block_renders_without_error() -> None:
+    pytest.importorskip("hmmlearn")
+    result = analyze(
+        _synthetic_close(rows=500),
+        source="synthetic",
+        min_train=100,
+        hmm_seeds=(0,),
+        hmm_n_iter=50,
+        hmm_refit_every=100,
+        null_paths=FAST_NULL_PATHS,
+        bootstrap_resamples=FAST_RESAMPLES,
+    )
+    assert result["hmm"]["available"] is True
+    text = render(result)
+    assert "  Features: log_return, vol_10, vol_20" in text
+    assert "  Walk-forward: " in text
+    assert "  First to flip (matched within +/-20 bars" in text
+    assert "HMM skipped" not in text
+
+
+def _pnl_comparison() -> dict:
+    return {
+        "threshold": {
+            "gross": {"sharpe": 0.5012, "total_return": 0.15, "max_drawdown": -0.08},
+            "net": {
+                "sharpe": 0.4123,
+                "total_return": 0.123,
+                "max_drawdown": -0.081,
+                "turnover": 4.2,
+            },
+        },
+        "hmm": {
+            "gross": {"sharpe": 0.6, "total_return": 0.2, "max_drawdown": -0.05},
+            "net": {"sharpe": 0.55, "total_return": 0.18, "max_drawdown": -0.052, "turnover": 6.0},
+        },
+        "buy_and_hold": {
+            "net": {"sharpe": 0.83, "total_return": 0.3, "max_drawdown": -0.2, "turnover": 0.0}
+        },
+        "costs": {"per_side_bps": 3.0},
+        "n_days": 379,
+    }
+
+
+def test_phase4_pnl_comparison_lines_render_net_beside_gross(companion: dict) -> None:
+    with_hmm = copy.deepcopy(companion)
+    hmm = _phase4_hmm()
+    hmm["pnl_comparison"] = _pnl_comparison()
+    with_hmm["hmm"] = hmm
+    text = render(with_hmm)
+    assert (
+        "  P&L comparison, sign rule on each held regime, same cost model "
+        "(379 days, 3.0 bps per side):\n"
+    ) in text
+    assert (
+        "    threshold    net Sharpe 0.412 | total 12.30% | max DD -8.10% | turnover 4.2/yr | "
+        "gross Sharpe 0.501\n"
+    ) in text
+    assert (
+        "    HMM          net Sharpe 0.550 | total 18.00% | max DD -5.20% | turnover 6.0/yr | "
+        "gross Sharpe 0.600\n"
+    ) in text
+    assert (
+        "    buy-and-hold net Sharpe 0.830 | total 30.00% | max DD -20.00% | turnover 0.0/yr | "
+        "gross Sharpe n/a\n"
+    ) in text
+    pnl_at = text.index("  P&L comparison")
+    assert text.index("  First to flip ") < pnl_at < text.index("  Note: walk-forward")
+
+
+def test_phase4_pnl_comparison_missing_or_null_renders_as_na(companion: dict) -> None:
+    with_hmm = copy.deepcopy(companion)
+    hmm = _phase4_hmm()
+    hmm["pnl_comparison"] = {
+        "threshold": {"gross": None, "net": None},
+        "hmm": {"gross": {"sharpe": None}, "net": {"sharpe": None}},
+        "buy_and_hold": {"net": None},
+        "costs": {"per_side_bps": 3.0},
+        "n_days": 0,
+    }
+    with_hmm["hmm"] = hmm
+    text = render(with_hmm)
+    assert "(0 days, 3.0 bps per side)" in text
+    assert "    threshold    net Sharpe n/a | total n/a | max DD n/a | turnover n/a/yr" in text
+    without = _phase4_hmm()  # no pnl_comparison key at all: still renders, all n/a
+    with_hmm["hmm"] = without
+    assert "    HMM          net Sharpe n/a" in render(with_hmm)

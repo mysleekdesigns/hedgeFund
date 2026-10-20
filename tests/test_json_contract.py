@@ -576,3 +576,44 @@ def test_render_consumes_the_backtest_block(result: dict) -> None:
     without = copy.deepcopy(result)
     del without["backtest"]
     assert BACKTEST_HEADER not in render(without)
+
+
+# --------------------------------------------------------------------------- #
+# Phase 4: the ``hmm`` value becomes the walk-forward block, key order unchanged
+# --------------------------------------------------------------------------- #
+HMM_ROWS = 500  # ~380 decision days with a 100-bar first training window
+HMM_MIN_TRAIN = 100
+HMM_REFIT = 100
+HMM_SEEDS = (0,)
+HMM_N_ITER = 50
+
+
+def test_analyze_with_hmm_keeps_the_top_level_key_order_and_the_block_is_available() -> None:
+    pytest.importorskip("hmmlearn")
+    result = analyze(
+        _synthetic_close(HMM_ROWS),
+        source="synthetic",
+        hmm=True,
+        hmm_seeds=HMM_SEEDS,
+        hmm_n_iter=HMM_N_ITER,
+        hmm_refit_every=HMM_REFIT,
+        min_train=HMM_MIN_TRAIN,
+        null_paths=FAST_NULL_PATHS,
+        bootstrap_resamples=FAST_RESAMPLES,
+    )
+    assert list(result.keys()) == [
+        *COMPANION_FIELDS,
+        *EXPECTED_PHASE2_FIELDS,
+        *EXPECTED_PHASE3_FIELDS,
+    ]
+    hmm = result["hmm"]
+    assert hmm["available"] is True
+    assert list(hmm)[:3] == ["available", "regimes", "caveat"]
+    assert hmm["walk_forward"]["params"]["min_train"] == HMM_MIN_TRAIN
+    assert hmm["walk_forward"]["params"]["refit_every"] == HMM_REFIT
+    _assert_no_nan(hmm, "hmm")
+    assert "NaN" not in json.dumps(hmm)
+
+
+def test_analyze_hmm_disabled_is_still_the_companion_dict(result: dict) -> None:
+    assert result["hmm"] == {"available": False, "reason": "disabled via --no-hmm"}

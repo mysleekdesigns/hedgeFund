@@ -134,3 +134,36 @@ def test_universe_cost_profile_exists_in_defaults(defaults: dict, universe_path:
 
 def test_default_universe_names_an_existing_file(defaults: dict) -> None:
     assert (CONFIG_DIR / "universes" / f"{defaults['universe']}.yaml").is_file()
+
+
+def test_hmm_defaults_match_plan_fix_5(defaults: dict) -> None:
+    hmm = defaults["hmm"]
+    assert hmm["seeds"] == [0, 1, 2]
+    assert hmm["n_iter"] == 200
+    assert hmm["emission"] == "gaussian"
+    assert (hmm["enter"], hmm["exit"], hmm["confirm_bars"]) == (0.6, 0.4, 2)
+    assert hmm["refit_every"] == 21
+    assert hmm["train_bars"] == 2520
+    assert (hmm["vol_short"], hmm["vol_long"]) == (10, 20)
+    assert hmm["match_window"] == 20
+
+
+def test_hmm_config_matches_the_code_defaults(defaults: dict) -> None:
+    from hedgefund.backtest.hmm_walk_forward import DEFAULT_REFIT_EVERY, DEFAULT_TRAIN_BARS
+    from hedgefund.regime.hmm import DEFAULT_N_ITER, DEFAULT_SEEDS, EMISSION_CHOICES
+    from hedgefund.regime.hmm_features import DEFAULT_VOL_LONG, DEFAULT_VOL_SHORT
+    from hedgefund.regime.hmm_filter import DEFAULT_CONFIRM_BARS, DEFAULT_ENTER, DEFAULT_EXIT
+    from hedgefund.report.hmm_report import DEFAULT_MATCH_WINDOW
+
+    hmm = defaults["hmm"]
+    assert tuple(hmm["seeds"]) == DEFAULT_SEEDS
+    assert hmm["n_iter"] == DEFAULT_N_ITER
+    assert hmm["emission"] in EMISSION_CHOICES
+    assert (hmm["enter"], hmm["exit"], hmm["confirm_bars"]) == (
+        DEFAULT_ENTER,
+        DEFAULT_EXIT,
+        DEFAULT_CONFIRM_BARS,
+    )
+    assert (hmm["refit_every"], hmm["train_bars"]) == (DEFAULT_REFIT_EVERY, DEFAULT_TRAIN_BARS)
+    assert (hmm["vol_short"], hmm["vol_long"]) == (DEFAULT_VOL_SHORT, DEFAULT_VOL_LONG)
+    assert hmm["match_window"] == DEFAULT_MATCH_WINDOW

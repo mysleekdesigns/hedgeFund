@@ -40,6 +40,19 @@ statistics:
   homogeneity_periods: 2  # two halves of the ~125-label stride sequence keep enough transitions per row for the chi-square approximation (Fix 4)
   seed: 0               # explicit RNG seed for every null model and bootstrap; change to check sensitivity
 
+hmm:                    # Phase 4 walk-forward HMM (Fix 5); min_train is backtest.min_train
+  seeds: [0, 1, 2]      # Baum-Welch restarts, best log-likelihood kept; Phase 1 found ~40% of seeds reach the optimum
+  n_iter: 200           # Baum-Welch iteration cap, the companion default
+  emission: gaussian    # gaussian | student_t | auto; auto evaluates Student-t only when a single-outlier crash state appears
+  enter: 0.6            # hysteresis: enter a regime above this filtered probability (Fix 5)
+  exit: 0.4             # ... leave it below this (Fix 5)
+  confirm_bars: 2       # bars the probability must hold before the decision flips (Fix 5: 2 to 3)
+  refit_every: 21       # refit monthly on past data only (Fix 5)
+  train_bars: 2520      # sliding training window, ~10 trading years (Fix 5)
+  vol_short: 10         # 10-day realised volatility feature
+  vol_long: 20          # 20-day realised volatility feature, the labeller window
+  match_window: 20      # a flip is matched to the other detector's flip within +/-20 bars (agreement report)
+
 costs:                  # fee/slippage are per-side bps on |delta position|; borrow/funding are annual bps (Fix 6)
   profiles:
     us_etfs:

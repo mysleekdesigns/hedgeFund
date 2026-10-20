@@ -511,3 +511,146 @@ def test_backtest_short_history_still_serialises_with_null_metrics(csv_path: Pat
     assert bt["gross"]["sharpe"] is None and bt["net"]["n_days"] == 0
     assert bt["null"] is None and bt["holdout"] is None
     assert "NaN" not in json.dumps(parsed)
+
+
+# --------------------------------------------------------------------------- #
+# Phase 4: HMM flags and config block
+# --------------------------------------------------------------------------- #
+HMM_ROWS = 500  # ~380 decision days with a 100-bar first training window
+HMM_MIN_TRAIN = 100
+HMM_REFIT = 100
+HMM_YAML = (
+    "hmm:\n  seeds: [0, 1, 2]\n  n_iter: 200\n  emission: gaussian\n  enter: 0.6\n"
+    "  exit: 0.4\n  confirm_bars: 2\n  refit_every: 21\n  train_bars: 2520\n"
+    "  vol_short: 10\n  vol_long: 20\n  match_window: 20\n"
+)
+
+
+@pytest.fixture
+def hmm_csv_path(tmp_path: Path) -> Path:
+    path = tmp_path / "hmm_prices.csv"
+    _synthetic_close(HMM_ROWS).to_csv(path)
+    return path
+
+
+def test_analyze_hmm_flags_produce_one_json_object_with_an_available_block(
+    hmm_csv_path: Path,
+) -> None:
+    pytest.importorskip("hmmlearn")
+    result = CliRunner().invoke(
+        app,
+        [
+            "analyze",
+            "--csv",
+            str(hmm_csv_path),
+            "--json",
+            "--hmm-seeds",
+            "0",
+            "--hmm-refit-every",
+            str(HMM_REFIT),
+            "--min-train",
+            str(HMM_MIN_TRAIN),
+            *FAST_FLAGS,
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert result.stdout.count("\n") == 1
+    parsed = json.loads(result.stdout)
+    hmm = parsed["hmm"]
+    assert hmm["available"] is True
+    assert hmm["fit"]["seeds"] == [0]
+    assert hmm["walk_forward"]["params"]["refit_every"] == HMM_REFIT
+    assert hmm["walk_forward"]["params"]["min_train"] == HMM_MIN_TRAIN
+    assert hmm["decision"]["enter"] == 0.6  # from config/default.yaml hmm.enter
+
+
+def test_analyze_bad_hmm_emission_exits_1_with_error_object(csv_path: Path) -> None:
+    result = CliRunner().invoke(
+        app, ["analyze", "--csv", str(csv_path), "--json", "--hmm-emission", "bogus"]
+    )
+    assert result.exit_code == 1
+    parsed = json.loads(result.stdout)
+    assert list(parsed) == ["error"]
+    assert "--hmm-emission" in parsed["error"] and "bogus" in parsed["error"]
+
+
+@pytest.mark.parametrize("bad", ["", "0,x", "a"])
+def test_analyze_bad_hmm_seeds_exits_1_with_error_object(csv_path: Path, bad: str) -> None:
+    result = CliRunner().invoke(
+        app, ["analyze", "--csv", str(csv_path), "--json", "--hmm-seeds", bad]
+    )
+    assert result.exit_code == 1
+    assert "--hmm-seeds" in json.loads(result.stdout)["error"]
+
+
+def test_analyze_hmm_refit_every_zero_exits_1_with_error_object(hmm_csv_path: Path) -> None:
+    result = CliRunner().invoke(
+        app,
+        [
+            "analyze",
+            "--csv",
+            str(hmm_csv_path),
+            "--json",
+            "--hmm-refit-every",
+            "0",
+            "--min-train",
+            str(HMM_MIN_TRAIN),
+            *FAST_FLAGS,
+        ],
+    )
+    assert result.exit_code == 1
+    assert result.stdout.count("\n") == 1
+    parsed = json.loads(result.stdout)
+    assert list(parsed) == ["error"]
+    assert "refit_every" in parsed["error"]
+
+
+def test_hmm_seeds_parser_accepts_spaces_and_several_seeds() -> None:
+    assert cli._parse_seeds("0, 1,2") == (0, 1, 2)
+
+
+def test_config_without_hmm_block_is_an_error_only_when_hmm_runs(
+    csv_path: Path, tmp_path: Path
+) -> None:
+    custom = tmp_path / "no_hmm_block.yaml"
+    custom.write_text(
+        "labelling:\n  window: 15\n  threshold: 0.03\n  return_type: log\n"
+        f"data:\n  years: 4\nbacktest:\n  min_train: {SMALL_MIN_TRAIN}\n{BACKTEST_YAML}"
+        f"{STATISTICS_YAML}{COSTS_YAML}"
+    )
+    with_hmm = CliRunner().invoke(
+        app, ["analyze", "--csv", str(csv_path), "--json", "--config", str(custom)]
+    )
+    assert with_hmm.exit_code == 1
+    assert "config is missing hmm." in json.loads(with_hmm.stdout)["error"]
+    without = CliRunner().invoke(
+        app, ["analyze", "--csv", str(csv_path), "--no-hmm", "--json", "--config", str(custom)]
+    )
+    assert without.exit_code == 0, without.output
+
+
+def test_hmm_config_block_supplies_the_walk_forward_params(
+    hmm_csv_path: Path, tmp_path: Path
+) -> None:
+    pytest.importorskip("hmmlearn")
+    custom = tmp_path / "custom_hmm.yaml"
+    hmm_yaml = (
+        HMM_YAML.replace("seeds: [0, 1, 2]", "seeds: [3]")
+        .replace("n_iter: 200", "n_iter: 40")
+        .replace("refit_every: 21", f"refit_every: {HMM_REFIT}")
+        .replace("confirm_bars: 2", "confirm_bars: 3")
+    )
+    custom.write_text(
+        "labelling:\n  window: 20\n  threshold: 0.05\n  return_type: simple\n"
+        f"data:\n  years: 4\nbacktest:\n  min_train: {HMM_MIN_TRAIN}\n{BACKTEST_YAML}"
+        f"{STATISTICS_YAML}{COSTS_YAML}{hmm_yaml}"
+    )
+    result = CliRunner().invoke(
+        app, ["analyze", "--csv", str(hmm_csv_path), "--json", "--config", str(custom)]
+    )
+    assert result.exit_code == 0, result.output
+    hmm = json.loads(result.stdout)["hmm"]
+    assert hmm["available"] is True, hmm
+    assert hmm["fit"]["seeds"] == [3]
+    assert hmm["decision"]["confirm_bars"] == 3
+    assert hmm["walk_forward"]["params"]["refit_every"] == HMM_REFIT

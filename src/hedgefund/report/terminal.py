@@ -58,6 +58,22 @@ DSR_HYBRID_CAVEAT = (
     "returns against SR0 from the in-sample grid; the default cell is not the argmax and "
     "its sample is longer than the grid cells'."
 )
+HMM_PHASE4_KEYS = (  # any of these under ``hmm`` turns on the Phase 4 lines
+    "features",
+    "fit",
+    "filtered_probabilities",
+    "decision",
+    "walk_forward",
+    "agreement_with_threshold",
+    "first_to_flip",
+    "pnl_comparison",
+)
+HMM_PNL_ROWS = (  # (label, key under hmm.pnl_comparison)
+    ("threshold", "threshold"),
+    ("HMM", "hmm"),
+    ("buy-and-hold", "buy_and_hold"),
+)
+HMM_FLIP_LABELS = {"bear": "Bear", "bull": "Bull"}  # first_to_flip keys -> printed regime
 LAG_LABELLER_LABELS = {
     "threshold": "threshold (plain)",
     "zscore": "z-score",
@@ -143,13 +159,14 @@ def render(result: dict) -> str:
     hmm = a["hmm"]
     if hmm.get("available"):
         lines.append("")
-        lines.append("Hidden Markov Model (Baum-Welch + Viterbi):")
+        lines.append("Hidden Markov Model (Baum-Welch, walk-forward filtered):")
         for r in hmm["regimes"]:
             lines.append(
                 f"  {r['label']:<9s} (latent state {r['latent_state']}): "
                 f"{r['mean_daily_return'] * PERCENT:+.3f}% mean daily return"
             )
         lines.append(f"  Note: {hmm['caveat']}")
+        lines.extend(_hmm_phase4_lines(hmm))
     else:
         lines.append("")
         lines.append(
@@ -342,6 +359,90 @@ def _get(node: dict | None, *keys: str) -> object:
             return None
         node = node.get(key)
     return node
+
+
+def _text(value: object) -> str:
+    """A string field, ``n/a`` for ``None``."""
+    return str(value) if value is not None else NA
+
+
+def _hmm_phase4_lines(hmm: dict) -> list[str]:
+    """The Phase 4 lines of the HMM block: features, fit, decision, walk-forward,
+    agreement, first-to-flip, P&L comparison (net beside gross). A dict carrying only
+    the companion keys (``available``, ``regimes``, ``caveat``) renders nothing here;
+    every key is read with ``.get``."""
+    if not any(key in hmm for key in HMM_PHASE4_KEYS):
+        return []
+    lines: list[str] = []
+    features = hmm.get("features")
+    names = _get(features, "names")
+    lines.append(
+        f"  Features: {', '.join(names) if isinstance(names, list) else NA} "
+        f"(vol windows {_count(_get(features, 'vol_short'))}/"
+        f"{_count(_get(features, 'vol_long'))}; "
+        f"standardised with {_text(_get(features, 'standardisation'))})"
+    )
+    fit = hmm.get("fit")
+    seeds = _get(fit, "seeds")
+    lines.append(
+        f"  Fit: best seed {_count(_get(fit, 'seed'))} of restarts "
+        f"[{', '.join(str(s) for s in seeds) if isinstance(seeds, list) else NA}] | "
+        f"log-likelihood {_num(_get(fit, 'log_likelihood'), 2)} | "
+        f"emission {_text(_get(fit, 'emission'))} | "
+        f"converged {_text(_get(fit, 'converged'))}"
+    )
+    decision = hmm.get("decision")
+    probs = hmm.get("filtered_probabilities")
+    lines.append(
+        f"  Decision: {_text(_get(decision, 'regime'))} "
+        f"(raw argmax {_text(_get(decision, 'raw_regime'))}) | filtered "
+        f"Bear {_pct(_get(probs, 'bear'))} Sideways {_pct(_get(probs, 'sideways'))} "
+        f"Bull {_pct(_get(probs, 'bull'))} | enter {_num(_get(decision, 'enter'))} "
+        f"exit {_num(_get(decision, 'exit'))} confirm "
+        f"{_count(_get(decision, 'confirm_bars'))} bars"
+    )
+    wf = hmm.get("walk_forward")
+    lines.append(
+        f"  Walk-forward: {_count(_get(wf, 'n_days'))} decision days, "
+        f"{_count(_get(wf, 'n_refits'))} refits on past data only"
+    )
+    agree = hmm.get("agreement_with_threshold")
+    lines.append(
+        f"  Agreement with the threshold labeller: {_pct(_get(agree, 'share_agree'))} "
+        f"of {_count(_get(agree, 'n'))} common days"
+    )
+    flip = hmm.get("first_to_flip")
+    lines.append(
+        f"  First to flip (matched within +/-{_count(_get(flip, 'match_window'))} bars; "
+        "lead > 0 = HMM earlier):"
+    )
+    for key, label in HMM_FLIP_LABELS.items():
+        entry = _get(flip, key)
+        lines.append(
+            f"    into {label:<5s} HMM first {_count(_get(entry, 'hmm_first'))} | "
+            f"threshold first {_count(_get(entry, 'threshold_first'))} | "
+            f"same bar {_count(_get(entry, 'same_bar'))} | "
+            f"mean lead {_num(_get(entry, 'mean_lead_bars'), 1)} bars | "
+            f"unmatched HMM {_count(_get(entry, 'hmm_unmatched'))}, "
+            f"threshold {_count(_get(entry, 'threshold_unmatched'))}"
+        )
+    pnl = hmm.get("pnl_comparison")
+    lines.append(
+        f"  P&L comparison, sign rule on each held regime, same cost model "
+        f"({_count(_get(pnl, 'n_days'))} days, "
+        f"{_num(_get(pnl, 'costs', 'per_side_bps'), 1)} bps per side):"
+    )
+    for label, key in HMM_PNL_ROWS:
+        entry = _get(pnl, key)
+        lines.append(
+            f"    {label:<13s}net Sharpe {_num(_get(entry, 'net', 'sharpe'), 3)} | "
+            f"total {_pct(_get(entry, 'net', 'total_return'))} | "
+            f"max DD {_pct(_get(entry, 'net', 'max_drawdown'))} | "
+            f"turnover {_num(_get(entry, 'net', 'turnover'), 1)}/yr | "
+            f"gross Sharpe {_num(_get(entry, 'gross', 'sharpe'), 3)}"
+        )
+    lines.append(f"  Note: {_text(hmm.get('note'))}")
+    return lines
 
 
 def _days(value: object) -> str:

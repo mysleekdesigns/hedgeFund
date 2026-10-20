@@ -362,20 +362,20 @@ Progress key: `[x]` done, `[ ]` not started. Each phase ends with an acceptance 
 
 ### Phase 4 — HMM done properly (1 day)
 
-- [ ] Build a feature matrix: daily log return, 10-day and 20-day realised volatility, optional normalised volume and range.
-- [ ] Standardise features using training-window statistics only. (Fix 5)
-- [ ] Use a full covariance matrix; never fit on rolling volatility alone. (Fix 5)
-- [ ] Add an online forward filter that updates P(state) one bar at a time for the live signal. (Fix 3, Fix 5)
-- [ ] Add hysteresis (enter 0.6, exit 0.4) and a 2 to 3 bar confirmation on the filtered probability. (Fix 5)
-- [ ] Evaluate Student-t emissions if Gaussian fits produce a single-outlier crash state. (Fix 5)
-- [ ] Test: smoothed and filtered paths differ on the same data, proving they are not confused. (Fix 5)
-- [ ] Multi-restart Baum-Welch (configurable seeds), keep the best log-likelihood.
-- [ ] Order latent states by mean return so labels are stable across fits.
-- [ ] Walk-forward HMM: refit on past data only, decode the current state with filtered probabilities.
-- [ ] Agreement report between HMM regimes and threshold regimes, including which flips first.
-- [ ] Keep graceful degrade when hmmlearn is missing; JSON reports `available: false` with a reason.
-- [ ] Test: no-lookahead check on the walk-forward HMM path.
-- [ ] Test: with a fixed seed, repeated fits produce identical state sequences.
+- [x] Build a feature matrix: daily log return, 10-day and 20-day realised volatility, optional normalised volume and range.
+- [x] Standardise features using training-window statistics only. (Fix 5)
+- [x] Use a full covariance matrix; never fit on rolling volatility alone. (Fix 5)
+- [x] Add an online forward filter that updates P(state) one bar at a time for the live signal. (Fix 3, Fix 5)
+- [x] Add hysteresis (enter 0.6, exit 0.4) and a 2 to 3 bar confirmation on the filtered probability. (Fix 5)
+- [x] Evaluate Student-t emissions if Gaussian fits produce a single-outlier crash state. (Fix 5)
+- [x] Test: smoothed and filtered paths differ on the same data, proving they are not confused. (Fix 5)
+- [x] Multi-restart Baum-Welch (configurable seeds), keep the best log-likelihood.
+- [x] Order latent states by mean return so labels are stable across fits.
+- [x] Walk-forward HMM: refit on past data only, decode the current state with filtered probabilities.
+- [x] Agreement report between HMM regimes and threshold regimes, including which flips first.
+- [x] Keep graceful degrade when hmmlearn is missing; JSON reports `available: false` with a reason.
+- [x] Test: no-lookahead check on the walk-forward HMM path.
+- [x] Test: with a fixed seed, repeated fits produce identical state sequences.
 
 **Gate:** HMM section of the report runs walk-forward with no lookahead and degrades cleanly without hmmlearn.
 

@@ -12,8 +12,12 @@ matrices with a drift metric (Fix 4), mixing time and the Anderson-Goodman tests
 appends the single key ``backtest`` (``PHASE3_FIELDS``): the cost-aware walk-forward with
 gross and net metric sets, benchmarks, null percentiles, the permutation test, PSR / DSR,
 the two-year holdout, the sensitivity grid and the lag diagnostic
-(``hedgefund.report.backtest_report``). ``backtest_only`` returns the slim dict behind
-``hedgefund backtest``. New floats are emitted as JSON numbers or ``null``, never NaN.
+(``hedgefund.report.backtest_report``). Phase 4 extends the companion ``hmm`` value in
+place (``hedgefund.report.hmm_report.hmm_block``): the walk-forward, forward-filtered HMM
+with its agreement and first-to-flip report against the threshold labeller; the
+companion keys of that object stay first and unchanged. ``backtest_only`` returns the
+slim dict behind ``hedgefund backtest``. New floats are emitted as JSON numbers or
+``null``, never NaN.
 """
 
 import json
@@ -24,6 +28,7 @@ import numpy as np
 import pandas as pd
 
 from hedgefund.backtest.costs import SENSITIVITY_BPS, CostModel
+from hedgefund.backtest.hmm_walk_forward import DEFAULT_REFIT_EVERY, DEFAULT_TRAIN_BARS
 from hedgefund.backtest.lag import DEFAULT_LAG_ORDER
 from hedgefund.backtest.metrics import DEFAULT_HORIZONS
 from hedgefund.backtest.sensitivity import (
@@ -37,7 +42,9 @@ from hedgefund.backtest.walk_forward import (
     DEFAULT_ROLLING_BARS,
     walk_forward_backtest,
 )
-from hedgefund.regime.hmm import hmm_summary
+from hedgefund.regime.hmm import DEFAULT_N_ITER, DEFAULT_SEEDS
+from hedgefund.regime.hmm_features import DEFAULT_VOL_LONG, DEFAULT_VOL_SHORT
+from hedgefund.regime.hmm_filter import DEFAULT_CONFIRM_BARS, DEFAULT_ENTER, DEFAULT_EXIT
 from hedgefund.regime.labels import BEAR, BULL, SIDEWAYS, STATES, label_regimes
 from hedgefund.regime.markov import (
     DEFAULT_HALF_LIFE_BARS,
@@ -67,6 +74,7 @@ from hedgefund.regime.stats import (
     labeller_null,
 )
 from hedgefund.report.backtest_report import DEFAULT_RULE, DISCLAIMER, backtest_block
+from hedgefund.report.hmm_report import DEFAULT_MATCH_WINDOW, hmm_block
 
 FRAMEWORK = "Roan (@RohOnChain)"
 # ``DISCLAIMER`` is defined in ``backtest_report`` (the block carries it too) and
@@ -450,6 +458,17 @@ def analyze(
     sensitivity_thresholds: Sequence[float] = DEFAULT_SENSITIVITY_THRESHOLDS,
     cost_sensitivity_bps: Sequence[int] = SENSITIVITY_BPS,  # backtest.cost_sensitivity_bps
     lag_order: int = DEFAULT_LAG_ORDER,  # backtest.lag_order
+    hmm_seeds: Sequence[int] = DEFAULT_SEEDS,  # hmm.seeds: Baum-Welch restarts, best kept
+    hmm_n_iter: int = DEFAULT_N_ITER,  # hmm.n_iter: Baum-Welch iteration cap
+    hmm_emission: str = "gaussian",  # hmm.emission: gaussian | student_t | auto
+    hmm_enter: float = DEFAULT_ENTER,  # hmm.enter: hysteresis entry probability (Fix 5)
+    hmm_exit: float = DEFAULT_EXIT,  # hmm.exit: hysteresis exit probability (Fix 5)
+    hmm_confirm_bars: int = DEFAULT_CONFIRM_BARS,  # hmm.confirm_bars (Fix 5: 2 to 3 bars)
+    hmm_refit_every: int = DEFAULT_REFIT_EVERY,  # hmm.refit_every: monthly refit (Fix 5)
+    hmm_train_bars: int = DEFAULT_TRAIN_BARS,  # hmm.train_bars: ~10-year sliding window
+    hmm_vol_short: int = DEFAULT_VOL_SHORT,  # hmm.vol_short: 10-day realised volatility
+    hmm_vol_long: int = DEFAULT_VOL_LONG,  # hmm.vol_long: 20-day realised volatility
+    hmm_match_window: int = DEFAULT_MATCH_WINDOW,  # hmm.match_window: +/- bars to pair flips
 ) -> dict:
     """Run the whole framework: companion dict, Phase 2 statistics, Phase 3 ``backtest``.
 
@@ -458,8 +477,12 @@ def analyze(
     ``rolling_bars`` is the Phase 2 rolling-matrix window (``statistics.rolling_bars``);
     the walk-forward's rolling refit window is ``backtest_rolling_bars``
     (``backtest.rolling_bars``) because the two are separate config keys. The backtest
-    block shares ``null_paths`` and ``seed`` with the statistics. Raises ``ValueError``
-    when the series is too short to label at least two days.
+    block shares ``null_paths`` and ``seed`` with the statistics. The ``hmm`` value is the
+    Phase 4 walk-forward block (``hmm_block``); it reuses ``min_train`` as the bars the
+    first HMM refit trains on, takes its other knobs from the ``hmm_*`` parameters
+    (config ``hmm``) and charges its P&L comparison the same ``cost_model`` as the
+    backtest block. A bad HMM parameter raises ``ValueError`` like any other bad input.
+    Raises ``ValueError`` when the series is too short to label at least two days.
     """
     close = close.dropna()
     labels = _labels_or_raise(close, window=window, threshold=threshold, return_type=return_type)
@@ -510,7 +533,24 @@ def analyze(
             "max_drawdown": bt["max_drawdown"],
             "n_trades": bt["n_trades"],
         },
-        "hmm": hmm_summary(close, enabled=hmm),
+        "hmm": hmm_block(
+            close,
+            labels,
+            enabled=hmm,
+            seeds=hmm_seeds,
+            n_iter=hmm_n_iter,
+            emission=hmm_emission,
+            enter=hmm_enter,
+            exit=hmm_exit,
+            confirm_bars=hmm_confirm_bars,
+            min_train=min_train,
+            refit_every=hmm_refit_every,
+            train_bars=hmm_train_bars,
+            vol_short=hmm_vol_short,
+            vol_long=hmm_vol_long,
+            match_window=hmm_match_window,
+            cost_model=cost_model,
+        ),
         "framework": FRAMEWORK,
         "disclaimer": DISCLAIMER,
     }

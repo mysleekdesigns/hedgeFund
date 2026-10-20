@@ -1,10 +1,12 @@
 """Command-line entry point for hedgefund.
 
 ``hedgefund analyze --ticker SYM | --csv PATH [--json]`` mirrors the companion script's
-CLI and appends the honest statistics and the ``backtest`` block. ``hedgefund backtest``
-runs the cost-aware walk-forward alone (plan.md Phase 3) with cost and rule flags.
-``scan`` and ``report`` arrive in later phases. Config over flags: every default comes
-from ``config/default.yaml``; a flag overrides it.
+CLI and appends the honest statistics, the ``backtest`` block and the Phase 4
+walk-forward ``hmm`` block (``--hmm-seeds``, ``--hmm-refit-every``, ``--hmm-emission``
+override the ``hmm`` config block; ``--no-hmm`` skips it and then the block is not read).
+``hedgefund backtest`` runs the cost-aware walk-forward alone (plan.md Phase 3) with cost
+and rule flags. ``scan`` and ``report`` arrive in later phases. Config over flags: every
+default comes from ``config/default.yaml``; a flag overrides it.
 """
 
 import json
@@ -19,6 +21,7 @@ from hedgefund.backtest.walk_forward import REFIT_MODES
 from hedgefund.config import DEFAULT_CONFIG_PATH, load_config
 from hedgefund.data.csv_source import load_csv
 from hedgefund.data.yfinance_source import fetch_ticker
+from hedgefund.regime.hmm import EMISSION_CHOICES
 from hedgefund.regime.signal import POSITION_RULES
 from hedgefund.report.json_contract import analyze, backtest_only, to_json
 from hedgefund.report.terminal import print_backtest, print_pretty
@@ -29,6 +32,7 @@ app = typer.Typer(
 )
 
 ROLLING_PREFIX = "rolling:"  # ``--refit rolling:N`` sets the rolling window to N bars
+SEEDS_SEPARATOR = ","  # ``--hmm-seeds 0,1,2``
 UNIVERSES_DIR = DEFAULT_CONFIG_PATH.parent / "universes"  # config/universes/<name>.yaml
 
 
@@ -180,6 +184,60 @@ def _backtest_kwargs(
     }
 
 
+def _parse_seeds(seeds: str) -> tuple[int, ...]:
+    """``"0,1,2"`` -> ``(0, 1, 2)``; name the bad token on failure."""
+    tokens = [token.strip() for token in seeds.split(SEEDS_SEPARATOR) if token.strip()]
+    if not tokens:
+        raise ValueError(f"--hmm-seeds needs at least one integer, got {seeds!r}")
+    try:
+        return tuple(int(token) for token in tokens)
+    except ValueError as exc:
+        raise ValueError(
+            f"--hmm-seeds must be comma-separated integers such as 0,1,2, got {seeds!r}"
+        ) from exc
+
+
+def _validate_emission(emission: str) -> str:
+    if emission not in EMISSION_CHOICES:
+        raise ValueError(f"--hmm-emission must be one of {EMISSION_CHOICES}, got {emission!r}")
+    return emission
+
+
+def _hmm_kwargs(
+    cfg: dict, *, seeds: str | None, refit_every: int | None, emission: str | None
+) -> dict:
+    """The Phase 4 ``hmm_*`` keyword arguments of ``analyze`` from the ``hmm`` config block.
+
+    ``--hmm-seeds``, ``--hmm-refit-every`` and ``--hmm-emission`` override their config
+    values; everything else comes from the config only. ``min_train`` is shared with the
+    backtest (``backtest.min_train``) and is not read here.
+    """
+    seeds_used = (
+        _parse_seeds(seeds)
+        if seeds is not None
+        else tuple(int(s) for s in _config_value(cfg, "hmm", "seeds"))
+    )
+    refit_used = int(
+        refit_every if refit_every is not None else _config_value(cfg, "hmm", "refit_every")
+    )
+    emission_used = _validate_emission(
+        str(emission if emission is not None else _config_value(cfg, "hmm", "emission"))
+    )
+    return {
+        "hmm_seeds": seeds_used,
+        "hmm_n_iter": int(_config_value(cfg, "hmm", "n_iter")),
+        "hmm_emission": emission_used,
+        "hmm_enter": float(_config_value(cfg, "hmm", "enter")),
+        "hmm_exit": float(_config_value(cfg, "hmm", "exit")),
+        "hmm_confirm_bars": int(_config_value(cfg, "hmm", "confirm_bars")),
+        "hmm_refit_every": refit_used,
+        "hmm_train_bars": int(_config_value(cfg, "hmm", "train_bars")),
+        "hmm_vol_short": int(_config_value(cfg, "hmm", "vol_short")),
+        "hmm_vol_long": int(_config_value(cfg, "hmm", "vol_long")),
+        "hmm_match_window": int(_config_value(cfg, "hmm", "match_window")),
+    }
+
+
 def _fail(exc: Exception, json_output: bool) -> None:
     if json_output:
         typer.echo(json.dumps({"error": str(exc)}))
@@ -267,6 +325,20 @@ def analyze_command(
     no_hmm: Annotated[
         bool, typer.Option("--no-hmm", help="Skip the HMM fit even if hmmlearn is available")
     ] = False,
+    hmm_seeds: Annotated[
+        str | None,
+        typer.Option(
+            "--hmm-seeds", help="Comma-separated Baum-Welch seeds, e.g. 0,1,2 (overrides config)"
+        ),
+    ] = None,
+    hmm_refit_every: Annotated[
+        int | None,
+        typer.Option("--hmm-refit-every", help="Bars between walk-forward HMM refits"),
+    ] = None,
+    hmm_emission: Annotated[
+        str | None,
+        typer.Option("--hmm-emission", help=f"HMM emission: one of {', '.join(EMISSION_CHOICES)}"),
+    ] = None,
     null_paths: NullPathsOpt = None,
     bootstrap_resamples: Annotated[
         int | None,
@@ -327,6 +399,14 @@ def analyze_command(
             funding_bps=None,
         )
         backtest_kwargs["backtest_rolling_bars"] = backtest_kwargs.pop("rolling_bars")
+        # With --no-hmm the hmm block is never run, so a config without it still works.
+        hmm_kwargs = (
+            {}
+            if no_hmm
+            else _hmm_kwargs(
+                cfg, seeds=hmm_seeds, refit_every=hmm_refit_every, emission=hmm_emission
+            )
+        )
 
         close, source = _load_close(ticker, csv, years_used, json_output)
         result = analyze(
@@ -342,6 +422,7 @@ def analyze_command(
             seed=seed_used,
             **statistics_kwargs,
             **backtest_kwargs,
+            **hmm_kwargs,
         )
     except Exception as exc:
         _fail(exc, json_output)

@@ -2,3 +2,4 @@
 - [Phase 1 review context](phase1-review-context.md) — offline fresh-companion recipe, 1-ulp CSV parser gap, inherited companion conventions (zero rows, first-day DD, full-sample HMM)
 - [Phase 2 review context](phase2-review-context.md) — homogeneity test over-rejects 30% on daily labels (use stride), bootstrap coverage numbers, run-length = diagonal identity
 - [Phase 3 review context](phase3-review-context.md) — SPY null numbers (drift-dominated nulls, random-sign cost artefact 75→96 pct), dead band inert for sign rule, lag = entries only, 12 ms/pass, HEAD-vs-worktree recipe
+- [Phase 4 review context](phase4-review-context.md) — SPY HMM timing (47 s, 107 refits), Student-t flag not a tail test, first_to_flip earliest-match bias, config errors swallowed, min_covar floor

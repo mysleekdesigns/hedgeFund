@@ -19,6 +19,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from hedgefund.backtest.hmm_walk_forward import hmm_walk_forward_from_close
 from hedgefund.backtest.walk_forward import WalkForwardResult, run_walk_forward
 from hedgefund.regime.labels import (
     ensemble_label_regimes,
@@ -166,6 +167,35 @@ def _hysteresis_labels(close: pd.Series) -> dict[str, pd.Series]:
     }
 
 
+# Phase 4 walk-forward HMM (Fix 5). Features start at close index 20 (the 20-day vol
+# warm-up), so with MIN_TRAIN feature rows of training the first decision sits at close
+# index MIN_TRAIN + 20, before the first cut. Refits every 50 decisions on rows strictly
+# before the refit date; one seed and 50 Baum-Welch iterations keep each call near 1 s.
+# The fitter pins BLAS to one thread so fits on identical rows are bit-identical.
+HMM_REFIT_EVERY = 50
+HMM_SEEDS = (0,)
+HMM_N_ITER = 50
+
+
+def _hmm_walk_forward(close: pd.Series) -> dict[str, pd.Series]:
+    pytest.importorskip("hmmlearn")
+    result = hmm_walk_forward_from_close(
+        close,
+        min_train=MIN_TRAIN,
+        refit_every=HMM_REFIT_EVERY,
+        seeds=HMM_SEEDS,
+        n_iter=HMM_N_ITER,
+    )
+    assert result.available, result.reason
+    return {
+        "hmm_regimes": result.regimes,
+        "hmm_raw_regimes": result.raw_regimes,
+        "hmm_p_bear": result.filtered["bear"],
+        "hmm_p_bull": result.filtered["bull"],
+        "hmm_log_likelihood": result.log_likelihood,
+    }
+
+
 ESTIMATORS: list[tuple[str, Estimator]] = [
     ("label_regimes", _labels),
     ("walk_forward_sign_rule", _walk_forward),
@@ -181,6 +211,7 @@ ESTIMATORS: list[tuple[str, Estimator]] = [
     ("walk_forward_sign_dead_band", _walk_forward_sign_dead_band),
     ("walk_forward_long_only_dead_band", _walk_forward_long_only_dead_band),
     ("walk_forward_rolling_persistence_dead_band", _walk_forward_rolling_persistence_dead_band),
+    ("hmm_walk_forward", _hmm_walk_forward),
 ]
 
 
