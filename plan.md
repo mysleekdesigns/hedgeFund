@@ -397,13 +397,13 @@ Progress key: `[x]` done, `[ ]` not started. Each phase ends with an acceptance 
 - [x] Write `skills/regime/SKILL.md` wrapping `hedgefund analyze --json`.
 - [x] Document the extended JSON contract and the three composition patterns (gate, size filter, standalone).
 - [x] Add `.claude-plugin/plugin.json` so the project installs as a local plugin.
-- [ ] Write `pine/markov_regime.pine`: labels placed on the bar where the hold condition is met, never back-dated.
-- [ ] Add a hindsight-labels toggle, off by default, that draws back-dated labels in a distinct hollow style tagged "hindsight". (Fix 2)
+- [x] Write `pine/markov_regime.pine`: labels placed on the bar where the hold condition is met, never back-dated.
+- [x] Add a hindsight-labels toggle, off by default, that draws back-dated labels in a distinct hollow style tagged "hindsight". (Fix 2)
 - [ ] Add a `strategy()` variant entering on the next bar open after a confirmed flip, with `process_orders_on_close=false`. (Fix 2)
-- [ ] Manual check with Bar Replay on BTCUSDT and SPY daily: no label appears on a past bar. (Fix 2)
-- [ ] Add optional stride counting to the Pine overlay.
-- [ ] Keep the matrix table, stationary table, banner and ribbon from the original.
-- [ ] Manual check: overlay compiles on TradingView v5 and labels never appear on past bars.
+- [x] Manual check with Bar Replay on BTCUSDT and SPY daily: no label appears on a past bar. (Fix 2)
+- [x] Add optional stride counting to the Pine overlay.
+- [x] Keep the matrix table, stationary table, banner and ribbon from the original.
+- [x] Manual check: overlay compiles on TradingView v5 and labels never appear on past bars.
 
 **Gate:** invoking the skill from Claude Code returns valid JSON in one call; the Pine overlay compiles.
 
