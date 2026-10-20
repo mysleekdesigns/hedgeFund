@@ -1,0 +1,15 @@
+{
+  "name": "hedgefund",
+  "owner": { "name": "mysleekdesigns" },
+  "metadata": {
+    "description": "hedgeFund: Markov regime detection with honest, no-lookahead backtests. Local plugin marketplace for the project checkout.",
+    "version": "0.1.0"
+  },
+  "plugins": [
+    {
+      "name": "hedgefund",
+      "source": ".",
+      "description": "Regime skill wrapping `hedgefund analyze --json`: companion-compatible JSON plus stride matrix, null percentiles, costs, holdout, permutation p-values and a walk-forward HMM."
+    }
+  ]
+}

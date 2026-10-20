@@ -1,0 +1,6 @@
+{
+  "name": "hedgefund",
+  "description": "Honest Markov regime detection (Bull / Bear / Sideways) for any ticker or CSV. Reproduces the companion markov-hedge-fund-method contract bit-for-bit, then adds a non-overlapping stride matrix, labeller-induced null percentiles, block-bootstrap confidence intervals, drift and shrinkage matrices, a cost-aware no-lookahead walk-forward with gross and net metrics, benchmarks, permutation p-values, PSR/DSR, an untouched holdout, and a walk-forward filtered HMM. Research and signal tool only; nothing places orders. Framework by Roan (@RohOnChain).",
+  "version": "0.1.0",
+  "author": { "name": "mysleekdesigns" }
+}

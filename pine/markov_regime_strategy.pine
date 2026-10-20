@@ -1,0 +1,119 @@
+//@version=5
+// =============================================================================
+// Markov Regime Strategy (next-bar-open entries)
+//
+// strategy() variant of pine/markov_regime.pine (the overlay). Same regime
+// labeller, same hold filter, same confirmed-flip rule. The only job of this
+// file is to let TradingView's Strategy Tester show what the confirmed flip
+// signal would actually have earned, with no hindsight.
+//
+// How entries work (plan.md, Fix 2):
+//   * The regime is a trailing log-return label over `lookback_window` bars.
+//   * A flip is CONFIRMED only when the new regime has held for
+//     `min_regime_hold` consecutive confirmed bars (barstate.isconfirmed).
+//   * On that confirmed bar's close the script places an order. Because the
+//     strategy() call sets process_orders_on_close = false, TradingView fills
+//     the order at the NEXT bar's open. Every entry in the trade list is
+//     therefore one bar after the labelled flip bar, which is the earliest a
+//     live trader could have acted.
+//   * No strategy.* call and no label.new() exists outside the
+//     barstate.isconfirmed guard, so nothing can act on a live, unconfirmed bar.
+//
+// Regime encoding (internal, same as the overlay): 0 = Sideways, 1 = Bull,
+// 2 = Bear. The Python JSON contract orders states Bear / Sideways / Bull;
+// this integer encoding never leaves the Pine file.
+//
+// Manual test cases (TradingView Bar Replay; cannot be automated offline):
+//   1. BTCUSDT daily: step forward bar by bar. Each label appears only on the
+//      bar where the hold condition is met, never on a bar that has already
+//      passed. Each trade in the Strategy Tester list opens exactly one bar
+//      after the labelled flip bar.
+//   2. SPY daily: same checks. Also toggle "Allow shorts" off and confirm Bear
+//      flips close the long instead of opening a short, still at next open.
+//   3. Toggle "Flat in Sideways" off and confirm Sideways flips leave the
+//      position untouched.
+//
+// Backtests are historical, not forward-looking.
+// =============================================================================
+
+strategy("Markov Regime Strategy (next-bar-open entries)", overlay = true, process_orders_on_close = false, calc_on_every_tick = false, calc_on_order_fills = false, default_qty_type = strategy.percent_of_equity, default_qty_value = 100, initial_capital = 100000, commission_type = strategy.commission.percent, commission_value = 0.03, slippage = 2, max_labels_count = 500)
+
+// ────────────────────────────────────────────────────────────────────────────
+// Inputs — the regime block mirrors the overlay exactly so both files agree
+// ────────────────────────────────────────────────────────────────────────────
+grp_logic   = "Regime logic"
+grp_trading = "Trading"
+grp_display = "Display"
+
+lookback_window    = input.int(20,   title = "Lookback window (bars)", minval = 5,   maxval = 250, group = grp_logic, tooltip = "Number of bars used for the rolling log-return calculation.")
+bull_threshold_pct = input.float(5.0, title = "Bull threshold (%)",     minval = 0.1, maxval = 50.0, step = 0.1, group = grp_logic, tooltip = "Rolling log-return above this (in %) labels the bar Bull.")
+bear_threshold_pct = input.float(5.0, title = "Bear threshold (%)",     minval = 0.1, maxval = 50.0, step = 0.1, group = grp_logic, tooltip = "Rolling log-return below the negative of this (in %) labels the bar Bear.")
+min_regime_hold    = input.int(4,    title = "Min bars a regime must hold before a flip is confirmed", minval = 1, maxval = 50, group = grp_logic, tooltip = "A new regime must persist this many confirmed bars before the flip is acted on. The order is placed on the confirming bar's close and fills at the next bar's open.")
+
+allow_shorts     = input.bool(true, title = "Allow shorts",     group = grp_trading, tooltip = "On: a confirmed Bear flip opens a short. Off: a confirmed Bear flip goes flat.")
+flat_in_sideways = input.bool(true, title = "Flat in Sideways", group = grp_trading, tooltip = "On: a confirmed Sideways flip closes any open position. Off: Sideways flips are ignored and the last Bull / Bear position is kept.")
+
+show_regime_ribbon = input.bool(true, title = "Show regime ribbon", group = grp_display)
+show_flip_labels   = input.bool(true, title = "Label confirmed flips", group = grp_display, tooltip = "Draws one label on the bar where the hold condition is met (offset 0). Never back-dated.")
+
+// ────────────────────────────────────────────────────────────────────────────
+// Palette — same as the overlay. Pine transparency is 0..100 with 100 = fully
+// transparent; 90 keeps price as the hero.
+// ────────────────────────────────────────────────────────────────────────────
+c_bull_ribbon = color.rgb(132, 187, 161, 90)
+c_bear_ribbon = color.rgb(197, 127, 134, 90)
+c_side_ribbon = color.rgb(164, 171, 183, 90)
+c_bull_solid  = color.rgb(132, 187, 161, 30)
+c_bear_solid  = color.rgb(197, 127, 134, 30)
+c_side_solid  = color.rgb(164, 171, 183, 30)
+
+regime_ribbon(r) => r == 1 ? c_bull_ribbon : r == 2 ? c_bear_ribbon : c_side_ribbon
+regime_solid(r)  => r == 1 ? c_bull_solid  : r == 2 ? c_bear_solid  : c_side_solid
+regime_abbr(r)   => r == 1 ? "BULL"        : r == 2 ? "BEAR"        : "SIDE"
+
+// ────────────────────────────────────────────────────────────────────────────
+// Per-bar regime label (identical to the overlay)
+// ────────────────────────────────────────────────────────────────────────────
+log_ret = math.log(close / close[lookback_window])
+regime  = na(log_ret) ? int(na) : log_ret > bull_threshold_pct / 100.0 ? 1 : log_ret < -bear_threshold_pct / 100.0 ? 2 : 0
+
+// Regime ribbon: paints the bar's own regime, which only uses closes up to
+// and including this bar, so it carries no lookahead.
+bgcolor(show_regime_ribbon and not na(regime) ? regime_ribbon(regime) : na, title = "Regime ribbon")
+
+// ────────────────────────────────────────────────────────────────────────────
+// Hold filter (identical to the overlay): the regime must have been the same
+// for the last `min_regime_hold` bars, this bar included.
+// ────────────────────────────────────────────────────────────────────────────
+held = not na(regime)
+for k = 0 to min_regime_hold - 1
+    held := held and not na(regime[k]) and regime[k] == regime
+
+// ────────────────────────────────────────────────────────────────────────────
+// Confirmed flip -> order for the next bar's open
+//
+// `last_confirmed_regime` is updated only inside this guard, so the flip is
+// detected exactly once per durable regime change. The order placed here is
+// filled by TradingView at the next bar's open (process_orders_on_close =
+// false); the trade list must show every entry one bar after this bar.
+// No strategy.* call exists outside this barstate.isconfirmed guard.
+// ────────────────────────────────────────────────────────────────────────────
+var int last_confirmed_regime = na
+
+// The very first confirmed regime (last_confirmed_regime still na) also places
+// an order so the tester holds the established regime from the start; it gets
+// no label because there is no "from" regime to name.
+if barstate.isconfirmed and not na(regime) and held and regime != last_confirmed_regime
+    had_previous = not na(last_confirmed_regime)
+    if had_previous and show_flip_labels
+        flip_text = regime_abbr(last_confirmed_regime) + " -> " + regime_abbr(regime) + " (fill next open)"
+        label.new(bar_index, high, flip_text, yloc = yloc.abovebar, style = label.style_label_down, color = regime_solid(regime), textcolor = color.white, size = size.normal)
+    if regime == 1
+        strategy.entry("Long", strategy.long)
+    if regime == 2 and allow_shorts
+        strategy.entry("Short", strategy.short)
+    if regime == 2 and not allow_shorts
+        strategy.close_all()
+    if regime == 0 and flat_in_sideways
+        strategy.close_all()
+    last_confirmed_regime := regime

@@ -394,9 +394,9 @@ Progress key: `[x]` done, `[ ]` not started. Each phase ends with an acceptance 
 
 ### Phase 6 — Claude Code skill and Pine Script (½ day)
 
-- [ ] Write `skills/regime/SKILL.md` wrapping `hedgefund analyze --json`.
-- [ ] Document the extended JSON contract and the three composition patterns (gate, size filter, standalone).
-- [ ] Add `.claude-plugin/plugin.json` so the project installs as a local plugin.
+- [x] Write `skills/regime/SKILL.md` wrapping `hedgefund analyze --json`.
+- [x] Document the extended JSON contract and the three composition patterns (gate, size filter, standalone).
+- [x] Add `.claude-plugin/plugin.json` so the project installs as a local plugin.
 - [ ] Write `pine/markov_regime.pine`: labels placed on the bar where the hold condition is met, never back-dated.
 - [ ] Add a hindsight-labels toggle, off by default, that draws back-dated labels in a distinct hollow style tagged "hindsight". (Fix 2)
 - [ ] Add a `strategy()` variant entering on the next bar open after a confirmed flip, with `process_orders_on_close=false`. (Fix 2)
