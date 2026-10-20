@@ -37,3 +37,11 @@ available). Compare on the same input instead:
 
 Compare `close` values, not whole DataFrames: the parquet keeps a `datetime64[ms]` index
 and a `columns.name` of `Price` from yfinance, neither of which changes any number.
+
+## `spy_10y.companion.json`
+
+The companion script's `--json` output on the fixture above, produced exactly as the three
+steps describe (`--csv spy_10y.csv --no-hmm --json`, `source` normalised to `spy_10y.csv`).
+The `result` key holds the contract dict; `_provenance` records how it was made. The Phase 1
+reproduction test compares our `analyze()` against `result` at 6 decimals. Frozen; never
+regenerate it, because the fixture it was made from never changes either.

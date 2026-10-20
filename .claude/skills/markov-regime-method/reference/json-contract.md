@@ -19,7 +19,7 @@ Emitted by `markov_regime.py --json` and by `hedgefund analyze --json`. `states`
 | `current_regime` | str | regime as of the last bar |
 | `next_state_probabilities` | obj | `bear`, `sideways`, `bull`: P(next \| current) |
 | `signal` | float | `bull - bear` in [-1, 1] |
-| `transition_matrix` | 3×3 list[float] | row = from, col = to, rows sum to 1 |
+| `transition_matrix` | 3×3 list[float] | row = from, col = to, rows sum to 1; a state never seen as a source gives an all-zero row (companion convention, kept for bit-identity) |
 | `persistence_diagonal` | obj | `bear`, `sideways`, `bull`: P(stay) |
 | `stationary_distribution` | obj | `bear`, `sideways`, `bull`, sums to 1 |
 | `walk_forward` | obj | `sharpe`, `max_drawdown`, `n_trades`; first two may be NaN on short history |
@@ -32,6 +32,8 @@ On failure: `{"error": "..."}` on stdout, non-zero exit.
 ## Planned additions by phase
 
 Additive only. Keep names stable once shipped.
+
+Phase 1 additions (shipped): `params.return_type` str, `"simple"` or `"log"`, the rolling-return definition used by the labeller (companion default `"simple"`).
 
 Phase 2 (honest statistics):
 - `stride_matrix` 3×3, transitions counted `window` bars apart

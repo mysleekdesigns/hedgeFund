@@ -1,0 +1,71 @@
+{
+  "_provenance": {
+    "generator": "~/.claude/plugins/marketplaces/markov-hedge-fund-method/scripts/markov_regime.py",
+    "command": "markov_regime.py --csv spy_10y.csv --no-hmm --json",
+    "input": "tests/fixtures/spy_10y.parquet close column exported as date,close CSV",
+    "input_sha256": "554f015efd3e0b12d17c3ef6cd0a8db218eb15581fd333dc8ec29a71d6e3ad19",
+    "generated_at_utc": "2026-10-19",
+    "note": "Frozen companion-script output; the Phase 1 reproduction test compares analyze() to this at 6 decimals."
+  },
+  "result": {
+    "source": "spy_10y.csv",
+    "rows": 2511,
+    "date_start": "2016-10-20",
+    "date_end": "2026-10-16",
+    "params": {
+      "window": 20,
+      "threshold": 0.05,
+      "min_train": 252
+    },
+    "states": [
+      "Bear",
+      "Sideways",
+      "Bull"
+    ],
+    "current_regime": "Sideways",
+    "next_state_probabilities": {
+      "bear": 0.021374045801526718,
+      "sideways": 0.9302798982188295,
+      "bull": 0.04834605597964377
+    },
+    "signal": 0.02697201017811705,
+    "transition_matrix": [
+      [
+        0.7754010695187166,
+        0.22459893048128343,
+        0.0
+      ],
+      [
+        0.021374045801526718,
+        0.9302798982188295,
+        0.04834605597964377
+      ],
+      [
+        0.0,
+        0.28106508875739644,
+        0.7189349112426036
+      ]
+    ],
+    "persistence_diagonal": {
+      "bear": 0.7754010695187166,
+      "sideways": 0.9302798982188295,
+      "bull": 0.7189349112426036
+    },
+    "stationary_distribution": {
+      "bear": 0.07510040160642596,
+      "sideways": 0.7891566265060239,
+      "bull": 0.13574297188755016
+    },
+    "walk_forward": {
+      "sharpe": 0.24625014737592119,
+      "max_drawdown": -0.33912601231761175,
+      "n_trades": 2238
+    },
+    "hmm": {
+      "available": false,
+      "reason": "disabled via --no-hmm"
+    },
+    "framework": "Roan (@RohOnChain)",
+    "disclaimer": "Backtests are historical, not forward-looking."
+  }
+}

@@ -290,22 +290,22 @@ Progress key: `[x]` done, `[ ]` not started. Each phase ends with an acceptance 
 
 ### Phase 1 — Faithful reproduction (1 day)
 
-- [ ] Port `label_regimes` into `regime/labels.py` (simple-return variant, 20-day, ±5%).
-- [ ] Port `build_transition_matrix` into `regime/markov.py`.
-- [ ] Port `nstep_forecast` and `stationary_distribution` into `regime/markov.py`.
-- [ ] Port `signal_from_matrix` into `regime/signal.py`.
-- [ ] Port the incremental walk-forward into `backtest/walk_forward.py` (sign-only position, next-day return).
-- [ ] Port Sharpe and max drawdown into `backtest/metrics.py`.
-- [ ] Port `fit_hmm` into `regime/hmm.py` with the same lazy import and graceful degrade.
-- [ ] Port `load_csv` into `data/csv_source.py` and `fetch_ticker` into `data/yfinance_source.py`.
-- [ ] Define the `PriceSource` protocol in `data/base.py`.
-- [ ] Build `report/json_contract.py` emitting exactly the companion skill's field names.
-- [ ] Build `report/terminal.py` matching the on-camera pretty output.
-- [ ] Build `cli.py` with `hedgefund analyze --ticker|--csv [--json]`.
-- [ ] Test: synthetic chain from a known 3×3 matrix, estimate converges within tolerance.
-- [ ] Test: `stationary(P) @ P == stationary(P)` and rows of `P**50` equal the stationary vector.
-- [ ] Test: rows of every estimated matrix sum to 1.
-- [ ] Test: `analyze()` on the frozen SPY fixture reproduces the companion script's matrix, stationary mix, Sharpe and max DD to 6 decimals.
+- [x] Port `label_regimes` into `regime/labels.py` (simple-return variant, 20-day, ±5%).
+- [x] Port `build_transition_matrix` into `regime/markov.py`.
+- [x] Port `nstep_forecast` and `stationary_distribution` into `regime/markov.py`.
+- [x] Port `signal_from_matrix` into `regime/signal.py`.
+- [x] Port the incremental walk-forward into `backtest/walk_forward.py` (sign-only position, next-day return).
+- [x] Port Sharpe and max drawdown into `backtest/metrics.py`.
+- [x] Port `fit_hmm` into `regime/hmm.py` with the same lazy import and graceful degrade.
+- [x] Port `load_csv` into `data/csv_source.py` and `fetch_ticker` into `data/yfinance_source.py`.
+- [x] Define the `PriceSource` protocol in `data/base.py`.
+- [x] Build `report/json_contract.py` emitting exactly the companion skill's field names.
+- [x] Build `report/terminal.py` matching the on-camera pretty output.
+- [x] Build `cli.py` with `hedgefund analyze --ticker|--csv [--json]`.
+- [x] Test: synthetic chain from a known 3×3 matrix, estimate converges within tolerance.
+- [x] Test: `stationary(P) @ P == stationary(P)` and rows of `P**50` equal the stationary vector.
+- [x] Test: rows of every estimated matrix sum to 1.
+- [x] Test: `analyze()` on the frozen SPY fixture reproduces the companion script's matrix, stationary mix, Sharpe and max DD to 6 decimals.
 
 **Gate:** reproduction test passes against the frozen fixture and against a fresh run of the installed plugin on the same dates.
 

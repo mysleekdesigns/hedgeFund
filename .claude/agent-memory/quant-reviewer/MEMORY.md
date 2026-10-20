@@ -1,1 +1,2 @@
 - [Phase 0 review context](phase0-review-context.md) — uv cache env var, companion script path, SPY fixture quirks, plan cost inconsistency, ruff N806/B008 friction
+- [Phase 1 review context](phase1-review-context.md) — offline fresh-companion recipe, 1-ulp CSV parser gap, inherited companion conventions (zero rows, first-day DD, full-sample HMM)
