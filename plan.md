@@ -399,7 +399,7 @@ Progress key: `[x]` done, `[ ]` not started. Each phase ends with an acceptance 
 - [x] Add `.claude-plugin/plugin.json` so the project installs as a local plugin.
 - [x] Write `pine/markov_regime.pine`: labels placed on the bar where the hold condition is met, never back-dated.
 - [x] Add a hindsight-labels toggle, off by default, that draws back-dated labels in a distinct hollow style tagged "hindsight". (Fix 2)
-- [ ] Add a `strategy()` variant entering on the next bar open after a confirmed flip, with `process_orders_on_close=false`. (Fix 2)
+- [x] Add a `strategy()` variant entering on the next bar open after a confirmed flip, with `process_orders_on_close=false`. (Fix 2)
 - [x] Manual check with Bar Replay on BTCUSDT and SPY daily: no label appears on a past bar. (Fix 2)
 - [x] Add optional stride counting to the Pine overlay.
 - [x] Keep the matrix table, stationary table, banner and ribbon from the original.
