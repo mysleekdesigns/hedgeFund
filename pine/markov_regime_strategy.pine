@@ -36,6 +36,11 @@
 // Backtests are historical, not forward-looking.
 // =============================================================================
 
+// Costs: commission_value = 0.03 (% per side, i.e. 3 bps) plus 2 ticks slippage
+// matches the us_etfs profile in config/default.yaml (fee 1 + slippage 2 bps).
+// The crypto profile charges 10 + 10 bps per side; set commission_value = 0.20
+// before comparing BTCUSDT tester results with `hedgefund analyze --json`.
+// strategy() header arguments are const, so this cannot be an input.
 strategy("Markov Regime Strategy (next-bar-open entries)", overlay = true, process_orders_on_close = false, calc_on_every_tick = false, calc_on_order_fills = false, default_qty_type = strategy.percent_of_equity, default_qty_value = 100, initial_capital = 100000, commission_type = strategy.commission.percent, commission_value = 0.03, slippage = 2, max_labels_count = 500)
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -103,7 +108,7 @@ var int last_confirmed_regime = na
 // The very first confirmed regime (last_confirmed_regime still na) also places
 // an order so the tester holds the established regime from the start; it gets
 // no label because there is no "from" regime to name.
-if barstate.isconfirmed and not na(regime) and held and regime != last_confirmed_regime
+if barstate.isconfirmed and not na(regime) and held and (na(last_confirmed_regime) or regime != last_confirmed_regime)
     had_previous = not na(last_confirmed_regime)
     if had_previous and show_flip_labels
         flip_text = regime_abbr(last_confirmed_regime) + " -> " + regime_abbr(regime) + " (fill next open)"

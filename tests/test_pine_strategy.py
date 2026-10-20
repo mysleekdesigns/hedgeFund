@@ -84,6 +84,7 @@ def test_strategy_call_processes_orders_on_next_open(source: str) -> None:
 
 def test_strategy_call_does_not_recalculate_every_tick(source: str) -> None:
     assert "calc_on_every_tick = false" in _strategy_call(source)
+    assert "calc_on_order_fills = false" in _strategy_call(source)
 
 
 def test_process_orders_on_close_true_is_absent(source: str) -> None:

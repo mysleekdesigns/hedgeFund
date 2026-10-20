@@ -264,7 +264,7 @@ for k = 0 to min_regime_hold - 1
 
 flip_off = min_regime_hold - 1   // bars between the first flipped bar and now
 
-if barstate.isconfirmed and not na(regime) and held and regime != last_lbl_regime
+if barstate.isconfirmed and not na(regime) and held and (na(last_lbl_regime) or regime != last_lbl_regime)
     if show_transition_labels and not na(last_lbl_regime)
         flip_text = regime_abbr(last_lbl_regime) + "  ->  " + regime_abbr(regime)
         flip_note = flip_off > 0 ? "\nflip was at bar -" + str.tostring(flip_off) : ""
