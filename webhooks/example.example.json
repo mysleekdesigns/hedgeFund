@@ -1,0 +1,6 @@
+{
+  "name": "example",
+  "url": "https://example.invalid/hedgefund/daily",
+  "events": ["daily"],
+  "token_env": "HEDGEFUND_WEBHOOK_EXAMPLE"
+}

@@ -5,3 +5,4 @@
 - [Phase 4 review context](phase4-review-context.md) — SPY HMM timing (47 s, 107 refits), Student-t flag not a tail test, first_to_flip earliest-match bias, config errors swallowed, min_covar floor
 - [Phase 5 review context](phase5-review-context.md) — four warnings found and verified fixed same day; CSV cache keys carry a content fingerprint (file must be present); HEAD-vs-worktree recipe needs config/
 - [Phase 6 review context](phase6-review-context.md) — Pine int/int division is float (docs), array ternary + int!=na unverifiable, strategy cost = ETF profile only, static test gaps, plugin install string
+- [Phase 7 review context](phase7-review-context.md) — token_env exfil, urllib redirect forwards token, propose --rule ignored, crypto partial-bar window, IEX vs consolidated closes

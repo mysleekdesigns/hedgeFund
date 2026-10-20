@@ -167,3 +167,34 @@ def test_hmm_config_matches_the_code_defaults(defaults: dict) -> None:
     assert (hmm["refit_every"], hmm["train_bars"]) == (DEFAULT_REFIT_EVERY, DEFAULT_TRAIN_BARS)
     assert (hmm["vol_short"], hmm["vol_long"]) == (DEFAULT_VOL_SHORT, DEFAULT_VOL_LONG)
     assert hmm["match_window"] == DEFAULT_MATCH_WINDOW
+
+
+def test_data_alpaca_feed_and_adjustment_default_to_free_adjusted_bars(defaults: dict) -> None:
+    alpaca = defaults["data"]["alpaca"]
+    assert alpaca["feed"] == "iex"
+    assert alpaca["adjustment"] == "all"
+
+
+def test_data_alpaca_section_holds_no_credentials(defaults: dict) -> None:
+    alpaca = defaults["data"]["alpaca"]
+    assert set(alpaca) == {"feed", "adjustment"}
+    assert not any("key" in name.lower() or "secret" in name.lower() for name in alpaca)
+
+
+def test_daily_job_defaults_match_phase_7(defaults: dict) -> None:
+    daily = defaults["daily"]
+    assert daily["universe"] == "us_etfs"
+    assert daily["webhooks_dir"] == "webhooks"
+    assert daily["signal_file"] == "signal.json"
+    assert daily["latest_file"] == "signal_latest.json"
+
+
+def test_daily_universe_names_an_existing_file(defaults: dict) -> None:
+    assert (CONFIG_DIR / "universes" / f"{defaults['daily']['universe']}.yaml").is_file()
+
+
+def test_paper_sizing_defaults_match_phase_7(defaults: dict) -> None:
+    paper = defaults["paper"]
+    assert paper["max_gross"] == 1.0
+    assert paper["allow_short"] is True
+    assert paper["min_trade_notional"] == 1.0

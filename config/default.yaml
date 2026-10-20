@@ -11,8 +11,12 @@ labelling:
 
 data:
   years: 10             # history length when fetching a ticker (section 5)
-  source: yfinance      # yfinance | alpaca | csv; alpaca preferred when APCA_* keys are present (section 3)
+  source: yfinance      # yfinance | alpaca | csv; all three exist, yfinance needs no key; pass --source alpaca to use APCA_* keys (section 3)
   cache_dir: cache      # parquet cache keyed by source, symbol, start, end (rules/data-sources.md)
+  alpaca:               # keys come only from APCA_API_KEY_ID / APCA_API_SECRET_KEY in the environment at call time, never from this file
+                        # account reads use paper-api.alpaca.markets only; market data is read-only from data.alpaca.markets (rules/trading-safety.md)
+    feed: iex           # free IEX feed for paper accounts; IEX closes approximate the consolidated close, sip (paid) matches it
+    adjustment: all     # splits + dividends, matches yfinance auto_adjust=True so dates and adjustments align
 
 backtest:
   min_train: 252        # one trading year of history before the walk-forward starts (section 5)
@@ -65,5 +69,17 @@ costs:                  # fee/slippage are per-side bps on |delta position|; bor
       slippage_bps: 10  # section 5: 10 bps slippage for crypto
       borrow_bps: 0     # spot crypto has no borrow desk; shorts are expressed through perps (see funding_bps)
       funding_bps: 0    # spot has none; perpetual futures funding runs roughly 1000 bps a year, set that if trading perps
+
+daily:                  # Phase 7 daily job: recompute regimes for a watchlist and write a signal file, nothing more
+  universe: us_etfs     # watchlist the daily job scans by default (config/universes/)
+  webhooks_dir: webhooks  # registration files for run-summary consumers; real files are git-ignored
+  signal_file: signal.json        # per-run signal file under jobs/<run_id>/
+  latest_file: signal_latest.json # stable copy under jobs/ that `hedgefund propose` reads
+
+paper:                  # Phase 7 sizing helper: turns signal into a proposal that is printed, never submitted
+  max_gross: 1.0        # cap on total |weight| in a proposal; 1.0 = unlevered
+  allow_short: true     # a Bear signal proposes a short; false proposes flat
+  min_trade_notional: 1.0  # skip proposed orders under $1 (dust)
+  rule: sign            # position rule for proposals: sign | conviction | persistence | long_only; same default as backtest.rule
 
 universe: us_etfs       # default universe file under config/universes/

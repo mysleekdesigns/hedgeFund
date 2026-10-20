@@ -1,6 +1,6 @@
 # hedgeFund
 
-**Status: Phase 0 complete (scaffold, config, frozen SPY fixture). The regime engine, backtester, and data sources arrive in Phases 1 to 5; see `plan.md`.**
+**Status: Phases 0 to 6 complete (regime engine, walk-forward backtests, HMM, multi-asset scan, HTML reports, Claude Code skill, Pine overlay). Phase 7 adds the opt-in Alpaca paper integration: a daily job that writes a signal file and a sizing helper that prints proposals. See `plan.md`.**
 
 Python research platform for Markov regime detection (Bull / Bear / Sideways) with honest, no-lookahead backtests. It will reproduce the "hedge fund method" from Lewis Jackson's video faithfully, then fix the method's known weaknesses: overlapping-window autocorrelation, back-dated Pine labels, detection lag, non-stationarity, HMMs fitted on the wrong inputs, and backtests with no costs, benchmarks, or significance tests. The engine will keep the companion skill's JSON contract so anything built against that skill keeps working.
 
@@ -52,7 +52,7 @@ uv run ruff check .
 uv run hedgefund version
 ```
 
-Phase 1 adds the analysis command:
+The analysis command:
 
 ```
 uv run hedgefund analyze --ticker SPY --json
@@ -121,24 +121,68 @@ hedgeFund/
 │   ├── regime/              # labels, markov, signal, hmm, stats (pure functions, no I/O)
 │   ├── backtest/            # walk_forward, costs, metrics, benchmarks
 │   ├── report/              # json_contract, terminal, html
-│   ├── cli.py               # hedgefund analyze | backtest | scan | report
-│   └── jobs/                # scheduled scans
+│   ├── cli.py               # hedgefund analyze | backtest | scan | report | daily | propose
+│   ├── jobs/                # daily job, webhook run summaries
+│   └── paper/               # sizing helper: signal -> printed proposal, never an order
 ├── skills/regime/           # Claude Code skill wrapping the CLI
 ├── pine/                    # corrected Pine overlay, no back-dated labels
 ├── dashboard/               # optional Streamlit app
 ├── tests/                   # offline tests and fixtures/
-└── webhooks/                # reserved for job notifications
+└── webhooks/                # JSON registrations for daily run summaries (real files git-ignored)
 ```
 
-Today only the scaffold exists. Modules fill in phase by phase as listed in `plan.md`.
+## Data sources
 
-## Data sources (planned, Phases 1 and 5)
+Three sources implement the same `PriceSource` protocol and are selected with `--source` (or `data.source` in the config).
 
-- yfinance is the default and needs no API key.
-- CSV files with a date column and a close column.
-- Alpaca market data is optional and uses the paper endpoint only. Keys are read from the `APCA_API_KEY_ID` and `APCA_API_SECRET_KEY` environment variables at call time and are never written to config, cache, fixtures, logs, or JSON output.
+- `yfinance` is the default and needs no API key.
+- `csv` reads your own `<SYMBOL>.csv` files from `--csv-dir`, with a date column and a close column.
+- `alpaca` reads daily stock and crypto bars through `alpaca-py` (`uv sync --extra alpaca`). Market data comes read-only from `data.alpaca.markets` on the free IEX feed with split and dividend adjustment. Dates line up with yfinance exactly (both index by the New York trading date); IEX daily closes are IEX-only prints that approximate the consolidated close yfinance reports, typically within cents on liquid names, and `feed: sip` (paid subscription) is needed for equality. Crypto bars are New York calendar days, not the UTC days yfinance uses. Account reads use the paper endpoint only (`paper-api.alpaca.markets`). Keys are read from the `APCA_API_KEY_ID` and `APCA_API_SECRET_KEY` environment variables at call time and are never written to config, cache, fixtures, logs, or JSON output.
 
 Downloaded bars are cached as parquet under `./cache`. Tests run offline against the frozen series in `tests/fixtures/`.
+
+## Daily job and paper proposals (Phase 7, opt-in)
+
+Phase 7 is opt-in and paper-only. It adds two commands. Neither one talks to an order endpoint.
+
+`hedgefund daily` recomputes regimes for a watchlist and writes a signal file:
+
+```
+uv run hedgefund daily --universe us_etfs --source alpaca   # or --source yfinance; no keys needed
+```
+
+Each run writes `jobs/<run_id>/signal.json` and refreshes `jobs/signal_latest.json`, a stable copy that `hedgefund propose` reads. The signal file carries:
+
+| Field | Meaning |
+|-------|---------|
+| `as_of` | date of the last bar the regimes were computed on |
+| `symbols.<SYM>.current_regime` | Bull, Bear or Sideways on `as_of` |
+| `symbols.<SYM>.signal` | P(Bull) - P(Bear) in [-1, 1] from the walk-forward matrix as of `as_of` |
+| `symbols.<SYM>.stay_probability` | probability the current regime persists one more day |
+| `symbols.<SYM>.position` | the backtest rule's target in {-1, 0, +1} |
+| `symbols.<SYM>.last_close` | last close used |
+| `symbols.<SYM>.error` | per-symbol failure message, otherwise null; one bad symbol never aborts the run |
+| `orders_placed` | always `false` |
+
+Webhooks: drop a JSON registration file in `./webhooks/` and the job POSTs a run summary to it after every run. A registration has a `name`, an https `url`, `events` set to `["daily"]`, and optionally `token_env`, the name of an environment variable whose value is sent as the `X-Hedgefund-Token` header. That name must start with `HEDGEFUND_WEBHOOK_`; `APCA_*` and any other variable are refused, so a registration can never forward the broker keys. The token itself never appears in a file, redirects are refused, and the job output names only the webhook host, never its URL. Real registrations are git-ignored; a failed POST is logged and does not fail the run.
+
+`hedgefund propose` turns the latest signal file into proposed orders and prints them:
+
+```
+uv run hedgefund propose --equity 100000          # size against a stated equity
+uv run hedgefund propose --paper-equity           # read the paper account's equity instead (APCA_* keys)
+uv run hedgefund propose --equity 100000 --json   # the same proposal as one JSON object
+```
+
+Sizing follows the `paper` section of `config/default.yaml`: total |weight| is capped at `max_gross` (1.0, unlevered), a Bear signal proposes a short only when `allow_short` is true, and proposals under `min_trade_notional` are dropped as dust.
+
+### Order placement is a human action
+
+Nothing in hedgeFund submits, replaces, cancels or exercises orders. The daily job writes a signal file. The sizing helper prints proposals. Placing an order is a separate, explicit action the owner takes outside this tool, in the broker's own interface or client. There is no command, flag or config key that changes this.
+
+- Alpaca is paper-only (`paper-api.alpaca.markets`). The live endpoint is blocked by a hook in `.claude/settings.json`, as are the order-side Alpaca MCP tools.
+- Keys come from the environment at call time and are never persisted to config, cache, fixtures, logs, signal files or JSON output.
+- Every signal file, proposal and report carries the disclaimer: backtests are historical, not forward-looking.
 
 ## Development
 

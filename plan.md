@@ -409,14 +409,14 @@ Progress key: `[x]` done, `[ ]` not started. Each phase ends with an acceptance 
 
 ### Phase 7 — Alpaca paper integration, opt-in (1 day)
 
-- [ ] Confirm with the owner that this phase is wanted before starting.
-- [ ] Add `data/alpaca_source.py` for daily stock and crypto bars via the paper endpoint.
-- [ ] Read Alpaca keys from the environment only; never write them to config or cache.
-- [ ] Add a daily job that recomputes regimes for a watchlist and writes a signal file.
-- [ ] Post a run summary to consumers registered in `./webhooks`.
-- [ ] Add a paper-only sizing helper that turns `signal` into a target allocation and prints proposed orders.
-- [ ] Document that order placement is a separate, explicit human action; nothing submits orders automatically.
-- [ ] Test: Alpaca source and yfinance source return aligned closes for the same symbol and dates.
+- [x] Confirm with the owner that this phase is wanted before starting.
+- [x] Add `data/alpaca_source.py` for daily stock and crypto bars via the paper endpoint.
+- [x] Read Alpaca keys from the environment only; never write them to config or cache.
+- [x] Add a daily job that recomputes regimes for a watchlist and writes a signal file.
+- [x] Post a run summary to consumers registered in `./webhooks`.
+- [x] Add a paper-only sizing helper that turns `signal` into a target allocation and prints proposed orders.
+- [x] Document that order placement is a separate, explicit human action; nothing submits orders automatically.
+- [x] Test: Alpaca source and yfinance source return aligned closes for the same symbol and dates.
 
 **Gate:** the daily job runs end to end on paper data and produces a signal file without placing any order.
 

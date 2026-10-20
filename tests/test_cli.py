@@ -898,7 +898,7 @@ def test_scan_unknown_source_is_an_error(scan_workspace: dict, tmp_path: Path) -
             "--universe",
             str(scan_workspace["universe"]),
             "--source",
-            "alpaca",
+            "bogus",
             "--jobs-dir",
             str(tmp_path / "jobs"),
             "--json",
@@ -996,3 +996,306 @@ def test_analyze_kwargs_covers_every_analyze_keyword_but_close_source_and_cost_m
     expected = set(inspect.signature(cli.analyze).parameters) - {"close", "source", "cost_model"}
     assert set(kwargs) == expected
     assert kwargs["window"] == 20 and kwargs["hmm"] is True and kwargs["refit"] == "expanding"
+
+
+# --------------------------------------------------------------------------- #
+# Phase 7: ``daily`` writes a signal file and posts to webhooks; ``propose`` sizes it
+# --------------------------------------------------------------------------- #
+ALPACA_ENV_VARS = ("APCA_API_KEY_ID", "APCA_API_SECRET_KEY")
+PROPOSE_EQUITY = "100000"
+
+
+def _daily_args(workspace: dict, jobs_dir: Path, *extra: str) -> list[str]:
+    return [
+        "daily",
+        "--universe",
+        str(workspace["universe"]),
+        "--source",
+        "csv",
+        "--csv-dir",
+        str(workspace["csv_dir"]),
+        "--cache-dir",
+        str(workspace["cache_dir"]),
+        "--jobs-dir",
+        str(jobs_dir),
+        *SCAN_FLAGS,
+        *extra,
+    ]
+
+
+@pytest.fixture(scope="module")
+def daily_workspace(scan_workspace: dict, tmp_path_factory: pytest.TempPathFactory) -> dict:
+    """One ``daily --json --no-webhooks`` run over the scan workspace's CSVs and warm cache."""
+    jobs_dir = tmp_path_factory.mktemp("daily") / "jobs"
+    result = CliRunner().invoke(
+        app, _daily_args(scan_workspace, jobs_dir, "--no-webhooks", "--json")
+    )
+    assert result.exit_code == 0, result.output
+    assert result.stdout.count("\n") == 1
+    return {"jobs_dir": jobs_dir, "signal": json.loads(result.stdout)}
+
+
+def test_daily_json_prints_one_signal_object_with_no_orders(daily_workspace: dict) -> None:
+    signal = daily_workspace["signal"]
+    assert signal["orders_placed"] is False
+    assert signal["webhooks"] == []
+    assert signal["universe"] == SCAN_UNIVERSE_NAME and signal["source"] == "csv"
+    assert sorted(signal["symbols"]) == list(SCAN_SYMBOLS)
+    for symbol in SCAN_SYMBOLS:
+        entry = signal["symbols"][symbol]
+        assert entry["error"] is None
+        assert entry["position"] in (-1.0, 0.0, 1.0)
+        assert entry["last_close"] > 0
+    assert signal["framework"] == "Roan (@RohOnChain)"
+    assert signal["disclaimer"] == "Backtests are historical, not forward-looking."
+    assert (daily_workspace["jobs_dir"] / "signal_latest.json").is_file()
+    assert (daily_workspace["jobs_dir"] / signal["run_id"] / "signal.json").is_file()
+
+
+def test_daily_pretty_mode_prints_table_paths_and_the_orders_note(
+    scan_workspace: dict, tmp_path: Path
+) -> None:
+    jobs_dir = tmp_path / "jobs"
+    result = CliRunner().invoke(
+        app, _daily_args(scan_workspace, jobs_dir, "--no-webhooks", "--offline")
+    )
+    assert result.exit_code == 0, result.output
+    for symbol in SCAN_SYMBOLS:
+        assert symbol in result.stdout
+    assert f"signal: {jobs_dir}" in result.stdout
+    assert result.stdout.rstrip().endswith(cli.ORDERS_NOTE)
+
+
+def test_daily_webhook_failure_is_reported_in_json_not_raised(
+    scan_workspace: dict, tmp_path: Path
+) -> None:
+    """A registered consumer that cannot be reached (sockets are blocked) is ok=False."""
+    webhooks_dir = tmp_path / "webhooks"
+    webhooks_dir.mkdir()
+    (webhooks_dir / "local.json").write_text(
+        json.dumps({"name": "local", "url": "http://127.0.0.1:9/daily"})
+    )
+    result = CliRunner().invoke(
+        app,
+        _daily_args(
+            scan_workspace,
+            tmp_path / "jobs",
+            "--offline",
+            "--webhooks-dir",
+            str(webhooks_dir),
+            "--json",
+        ),
+    )
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.stdout)
+    assert payload["orders_placed"] is False
+    (hook,) = payload["webhooks"]
+    assert hook["name"] == "local" and hook["ok"] is False
+    assert hook["error"]
+
+
+def test_daily_source_alpaca_without_keys_names_the_env_var(
+    scan_workspace: dict, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    pytest.importorskip("hedgefund.data.alpaca_source")
+    for name in ALPACA_ENV_VARS:
+        monkeypatch.delenv(name, raising=False)
+    result = CliRunner().invoke(
+        app,
+        [
+            "daily",
+            "--universe",
+            str(scan_workspace["universe"]),
+            "--source",
+            "alpaca",
+            "--cache-dir",
+            str(tmp_path / "cache"),
+            "--jobs-dir",
+            str(tmp_path / "jobs"),
+            "--no-webhooks",
+            *SCAN_FLAGS,
+            "--json",
+        ],
+    )
+    assert result.exit_code == 1
+    error = json.loads(result.stdout)["error"]
+    assert ALPACA_ENV_VARS[0] in error
+    assert not (tmp_path / "jobs").exists()
+
+
+def test_scan_source_alpaca_without_keys_names_the_env_var(
+    scan_workspace: dict, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    pytest.importorskip("hedgefund.data.alpaca_source")
+    for name in ALPACA_ENV_VARS:
+        monkeypatch.delenv(name, raising=False)
+    result = CliRunner().invoke(
+        app,
+        [
+            "scan",
+            "--universe",
+            str(scan_workspace["universe"]),
+            "--source",
+            "alpaca",
+            "--cache-dir",
+            str(tmp_path / "cache"),
+            "--jobs-dir",
+            str(tmp_path / "jobs"),
+            "--json",
+        ],
+    )
+    assert result.exit_code == 1
+    assert ALPACA_ENV_VARS[0] in json.loads(result.stdout)["error"]
+
+
+def test_propose_json_prints_one_proposal_object_with_no_orders_placed(
+    daily_workspace: dict,
+) -> None:
+    pytest.importorskip("hedgefund.paper.sizing")
+    signal_path = daily_workspace["jobs_dir"] / "signal_latest.json"
+    result = CliRunner().invoke(
+        app, ["propose", "--signal", str(signal_path), "--equity", PROPOSE_EQUITY, "--json"]
+    )
+    assert result.exit_code == 0, result.output
+    assert result.stdout.count("\n") == 1
+    proposal = json.loads(result.stdout)
+    assert proposal["orders_placed"] is False
+    assert proposal["equity"] == float(PROPOSE_EQUITY)
+    assert proposal["run_id"] == daily_workspace["signal"]["run_id"]
+    assert proposal["rule"] == daily_workspace["signal"]["rule"]
+    assert set(proposal["target_weights"]) <= set(SCAN_SYMBOLS)
+    assert isinstance(proposal["orders"], list)
+
+
+def test_propose_defaults_to_signal_latest_under_jobs_dir(daily_workspace: dict) -> None:
+    pytest.importorskip("hedgefund.paper.sizing")
+    result = CliRunner().invoke(
+        app,
+        [
+            "propose",
+            "--jobs-dir",
+            str(daily_workspace["jobs_dir"]),
+            "--equity",
+            PROPOSE_EQUITY,
+            "--json",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert json.loads(result.stdout)["run_id"] == daily_workspace["signal"]["run_id"]
+
+
+def test_propose_pretty_mode_ends_with_the_not_submitted_note(daily_workspace: dict) -> None:
+    sizing = pytest.importorskip("hedgefund.paper.sizing")
+    signal_path = daily_workspace["jobs_dir"] / "signal_latest.json"
+    result = CliRunner().invoke(
+        app, ["propose", "--signal", str(signal_path), "--equity", PROPOSE_EQUITY]
+    )
+    assert result.exit_code == 0, result.output
+    assert result.stdout.rstrip().endswith(sizing.PROPOSAL_NOTE)
+
+
+def test_propose_with_both_equity_and_paper_equity_is_an_error(daily_workspace: dict) -> None:
+    signal_path = daily_workspace["jobs_dir"] / "signal_latest.json"
+    result = CliRunner().invoke(
+        app,
+        [
+            "propose",
+            "--signal",
+            str(signal_path),
+            "--equity",
+            PROPOSE_EQUITY,
+            "--paper-equity",
+            "--json",
+        ],
+    )
+    assert result.exit_code == 1
+    assert "--equity" in json.loads(result.stdout)["error"]
+
+
+def test_propose_with_neither_equity_nor_paper_equity_is_an_error(daily_workspace: dict) -> None:
+    signal_path = daily_workspace["jobs_dir"] / "signal_latest.json"
+    result = CliRunner().invoke(app, ["propose", "--signal", str(signal_path), "--json"])
+    assert result.exit_code == 1
+    assert "--paper-equity" in json.loads(result.stdout)["error"]
+
+
+def test_propose_missing_signal_file_names_the_path(tmp_path: Path) -> None:
+    missing = tmp_path / "signal_latest.json"
+    result = CliRunner().invoke(
+        app, ["propose", "--signal", str(missing), "--equity", PROPOSE_EQUITY, "--json"]
+    )
+    assert result.exit_code == 1
+    assert str(missing) in json.loads(result.stdout)["error"]
+
+
+def test_build_scan_source_alpaca_reads_feed_and_adjustment_from_config(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    pytest.importorskip("hedgefund.data.alpaca_source")
+    for name in ALPACA_ENV_VARS:
+        monkeypatch.setenv(name, "placeholder-for-construction-only")
+    cfg = {"data": {"alpaca": {"feed": "sip", "adjustment": "raw"}}}
+    source = cli._build_scan_source("alpaca", None, tmp_path / "cache", 3, False, cfg)
+    assert source.name == "alpaca"
+    assert source.inner.feed == "sip" and source.inner.adjustment == "raw"
+    assert source.inner.years == 3
+    # A config without the Phase 7 block falls back to the documented defaults.
+    fallback = cli._build_scan_source("alpaca", None, tmp_path / "cache", 3, False, {})
+    assert fallback.inner.feed == cli.DEFAULT_ALPACA_FEED
+    assert fallback.inner.adjustment == cli.DEFAULT_ALPACA_ADJUSTMENT
+
+
+def test_daily_json_never_prints_the_webhook_url(scan_workspace: dict, tmp_path: Path) -> None:
+    """A Slack-style hook URL carries its secret in the path; only the host may be shown."""
+    secret_path = "T0SECRET/B0PATH/xyzSENTINEL"
+    webhooks_dir = tmp_path / "webhooks"
+    webhooks_dir.mkdir()
+    (webhooks_dir / "slack.json").write_text(
+        json.dumps(
+            {"name": "slack", "url": f"https://hooks.example.invalid/services/{secret_path}"}
+        )
+    )
+    args = _daily_args(
+        scan_workspace, tmp_path / "jobs", "--offline", "--webhooks-dir", str(webhooks_dir)
+    )
+    as_json = CliRunner().invoke(app, [*args, "--json"])
+    assert as_json.exit_code == 0, as_json.output
+    assert as_json.stdout.count("\n") == 1
+    (hook,) = json.loads(as_json.stdout)["webhooks"]
+    assert hook["name"] == "slack" and hook["ok"] is False
+    assert "url" not in hook and hook["host"] == "hooks.example.invalid"
+    assert secret_path not in as_json.stdout
+    pretty = CliRunner().invoke(app, args)
+    assert pretty.exit_code == 0, pretty.output
+    assert "webhook slack (hooks.example.invalid): FAILED" in pretty.stdout
+    assert secret_path not in pretty.stdout and secret_path not in pretty.stderr
+
+
+def test_daily_rejects_a_registration_that_names_the_alpaca_secret(
+    scan_workspace: dict, tmp_path: Path
+) -> None:
+    webhooks_dir = tmp_path / "webhooks"
+    webhooks_dir.mkdir()
+    (webhooks_dir / "exfil.json").write_text(
+        json.dumps(
+            {
+                "name": "exfil",
+                "url": "https://attacker.invalid/",
+                "token_env": "APCA_API_SECRET_KEY",
+            }
+        )
+    )
+    result = CliRunner().invoke(
+        app,
+        _daily_args(
+            scan_workspace,
+            tmp_path / "jobs",
+            "--offline",
+            "--webhooks-dir",
+            str(webhooks_dir),
+            "--json",
+        ),
+    )
+    assert result.exit_code == 1
+    error = json.loads(result.stdout)["error"]
+    assert "exfil.json" in error and "token_env" in error

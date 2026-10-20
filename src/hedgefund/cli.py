@@ -8,7 +8,10 @@ override the ``hmm`` config block; ``--no-hmm`` skips it and then the block is n
 and rule flags. ``hedgefund scan --universe NAME`` runs the full ``analyze`` pipeline per
 symbol through the parquet cache, writes a run manifest, results and a ranked table under
 ``jobs/<run-id>/`` and renders the HTML report (Phase 5). ``hedgefund report RUN_ID``
-regenerates that HTML from the cached run without touching the network. Config over
+regenerates that HTML from the cached run without touching the network. ``hedgefund
+daily`` is the Phase 7 scheduled job: a scan plus a signal file and a summary POST to the
+consumers under ``webhooks/``; ``hedgefund propose`` turns that signal file into a paper
+allocation and prints the proposed orders without submitting anything. Config over
 flags: every default comes from ``config/default.yaml``; a flag overrides it.
 """
 
@@ -26,6 +29,14 @@ from hedgefund.data.base import PriceSource, close_series
 from hedgefund.data.cache import CachedSource, read_cached
 from hedgefund.data.csv_source import CsvDirSource, load_csv
 from hedgefund.data.yfinance_source import YFinanceSource, fetch_ticker
+from hedgefund.jobs.daily import (
+    DEFAULT_WEBHOOKS_DIR,
+    LATEST_FILE,
+    ORDERS_NOTE,
+    read_signal,
+    render_webhook_result,
+    run_daily,
+)
 from hedgefund.jobs.manifest import (
     DEFAULT_JOBS_DIR,
     RunManifest,
@@ -50,7 +61,13 @@ app = typer.Typer(
 ROLLING_PREFIX = "rolling:"  # ``--refit rolling:N`` sets the rolling window to N bars
 SEEDS_SEPARATOR = ","  # ``--hmm-seeds 0,1,2``
 UNIVERSES_DIR = DEFAULT_CONFIG_PATH.parent / "universes"  # config/universes/<name>.yaml
-SCAN_SOURCES = ("yfinance", "csv")  # ``--source`` choices for ``scan``; alpaca is Phase 7
+SCAN_SOURCES = ("yfinance", "csv", "alpaca")  # ``--source`` choices for ``scan`` / ``daily``
+# Defaults used when a config predates the Phase 7 keys (config over flags, but never crash).
+DEFAULT_ALPACA_FEED = "iex"  # the free IEX feed; "sip" needs a paid data subscription
+DEFAULT_ALPACA_ADJUSTMENT = "all"  # splits and dividends adjusted, matching yfinance auto_adjust
+DEFAULT_PAPER_MAX_GROSS = 1.0  # gross exposure capped at 100% of equity: no leverage by default
+DEFAULT_PAPER_ALLOW_SHORT = True  # the sign rule emits -1 in Bear; a long-only book sets False
+DEFAULT_PAPER_MIN_TRADE_NOTIONAL = 1.0  # skip proposed trades below one dollar of notional
 
 
 @app.callback()
@@ -347,16 +364,47 @@ def _analyze_kwargs(
     }
 
 
+def _config_get(config: dict | None, *keys: str, default: object) -> object:
+    """``_config_value`` that falls back to ``default`` when the key path is absent."""
+    try:
+        return _config_value(config if config is not None else {}, *keys)
+    except ValueError:
+        return default
+
+
 def _build_scan_source(
-    source_name: str, csv_dir: Path | None, cache_dir: Path, years: int, offline: bool
+    source_name: str,
+    csv_dir: Path | None,
+    cache_dir: Path,
+    years: int,
+    offline: bool,
+    cfg: dict | None = None,
 ) -> CachedSource:
-    """``--source`` wrapped in the parquet cache; ``--offline`` turns a cache miss into an error."""
+    """``--source`` wrapped in the parquet cache; ``--offline`` turns a cache miss into an error.
+
+    ``cfg`` supplies ``data.alpaca.feed`` / ``data.alpaca.adjustment`` for the alpaca
+    source; alpaca-py is imported lazily so the other sources work without it.
+    """
     if source_name == "yfinance":
         inner: PriceSource = YFinanceSource(years=years)
     elif source_name == "csv":
         if csv_dir is None:
             raise ValueError("--source csv needs --csv-dir DIR, a directory of <SYMBOL>.csv files.")
         inner = CsvDirSource(csv_dir)
+    elif source_name == "alpaca":
+        from hedgefund.data.alpaca_source import AlpacaSource, read_credentials
+
+        if not offline:
+            # Fail fast with the variable name instead of one error row per symbol; a warm
+            # cache under --offline needs no credentials at all.
+            read_credentials()
+        inner = AlpacaSource(
+            years=years,
+            feed=str(_config_get(cfg, "data", "alpaca", "feed", default=DEFAULT_ALPACA_FEED)),
+            adjustment=str(
+                _config_get(cfg, "data", "alpaca", "adjustment", default=DEFAULT_ALPACA_ADJUSTMENT)
+            ),
+        )
     else:
         raise ValueError(f"--source must be one of {SCAN_SOURCES}, got {source_name!r}")
     return CachedSource(inner, cache_dir, years=years, offline=offline)
@@ -703,7 +751,7 @@ def scan_command(
             rule=rule,
             dead_band=dead_band,
         )
-        price_source = _build_scan_source(source_name, csv_dir, cache_dir, years_used, offline)
+        price_source = _build_scan_source(source_name, csv_dir, cache_dir, years_used, offline, cfg)
         progress = None if json_output else (lambda message: typer.echo(message, err=True))
         scan = scan_universe(
             universe_loaded,
@@ -727,6 +775,223 @@ def scan_command(
         typer.echo(f"run dir: {scan.run_dir}")
         if index_path is not None:
             typer.echo(f"html: {index_path}")
+
+
+@app.command(name="daily")
+def daily_command(
+    universe: Annotated[
+        str | None,
+        typer.Option(
+            "--universe",
+            help="Universe name under config/universes or a YAML path (default: config universe)",
+        ),
+    ] = None,
+    source: Annotated[
+        str | None,
+        typer.Option("--source", help=f"Price source, one of {', '.join(SCAN_SOURCES)}"),
+    ] = None,
+    csv_dir: Annotated[
+        Path | None,
+        typer.Option("--csv-dir", help="Directory of <SYMBOL>.csv files for --source csv"),
+    ] = None,
+    cache_dir: Annotated[
+        Path | None,
+        typer.Option("--cache-dir", help="Parquet cache dir (default: config data.cache_dir)"),
+    ] = None,
+    jobs_dir: JobsDirOpt = None,
+    webhooks_dir: Annotated[
+        Path | None,
+        typer.Option(
+            "--webhooks-dir",
+            help="Directory of webhook registrations (default: config daily.webhooks_dir)",
+        ),
+    ] = None,
+    no_webhooks: Annotated[
+        bool, typer.Option("--no-webhooks", help="Write the signal file but post to nobody")
+    ] = False,
+    offline: Annotated[
+        bool,
+        typer.Option("--offline", help="Serve every symbol from the cache; a miss is an error"),
+    ] = False,
+    years: YearsOpt = None,
+    window: WindowOpt = None,
+    threshold: ThresholdOpt = None,
+    min_train: MinTrainOpt = None,
+    no_hmm: NoHmmOpt = False,
+    hmm_seeds: HmmSeedsOpt = None,
+    hmm_refit_every: HmmRefitEveryOpt = None,
+    hmm_emission: HmmEmissionOpt = None,
+    null_paths: NullPathsOpt = None,
+    bootstrap_resamples: BootstrapResamplesOpt = None,
+    seed: SeedOpt = None,
+    refit: RefitOpt = None,
+    rule: RuleOpt = None,
+    dead_band: DeadBandOpt = None,
+    json_output: JsonOpt = False,
+    config: ConfigOpt = None,
+) -> None:
+    """Rescan a watchlist, write the signal file and post a summary to the webhooks.
+
+    Writes jobs/<run-id>/signal.json and jobs/signal_latest.json, then POSTs a compact
+    summary to every consumer registered under webhooks/ (see webhooks/README.md). The
+    signal file is a signal, not an order: nothing here submits orders.
+    """
+    try:
+        cfg = load_config(config)
+        universe_loaded = load_universe(
+            universe if universe is not None else str(_config_value(cfg, "universe"))
+        )
+        years_used = int(years if years is not None else _config_value(cfg, "data", "years"))
+        source_name = str(source if source is not None else _config_value(cfg, "data", "source"))
+        if cache_dir is None:
+            cache_dir = Path(str(_config_value(cfg, "data", "cache_dir")))
+        jobs_dir_used = jobs_dir if jobs_dir is not None else DEFAULT_JOBS_DIR
+        if no_webhooks:
+            webhooks_used: Path | None = None
+        elif webhooks_dir is not None:
+            webhooks_used = webhooks_dir
+        else:
+            webhooks_used = Path(
+                str(_config_get(cfg, "daily", "webhooks_dir", default=DEFAULT_WEBHOOKS_DIR))
+            )
+        kwargs = _analyze_kwargs(
+            cfg,
+            window=window,
+            threshold=threshold,
+            min_train=min_train,
+            no_hmm=no_hmm,
+            hmm_seeds=hmm_seeds,
+            hmm_refit_every=hmm_refit_every,
+            hmm_emission=hmm_emission,
+            null_paths=null_paths,
+            bootstrap_resamples=bootstrap_resamples,
+            seed=seed,
+            refit=refit,
+            rule=rule,
+            dead_band=dead_band,
+        )
+        price_source = _build_scan_source(source_name, csv_dir, cache_dir, years_used, offline, cfg)
+        progress = None if json_output else (lambda message: typer.echo(message, err=True))
+        job = run_daily(
+            universe_loaded,
+            price_source,
+            cfg,
+            analyze_kwargs=kwargs,
+            jobs_dir=jobs_dir_used,
+            webhooks_dir=webhooks_used,
+            progress=progress,
+            rule=str(kwargs["rule"]),
+        )
+    except Exception as exc:
+        _fail(exc, json_output)
+
+    if json_output:
+        payload = dict(job.signal)
+        payload["webhooks"] = [result.to_dict() for result in job.webhook_results]
+        typer.echo(json.dumps(payload))
+    else:
+        typer.echo(render_table(job.scan.table))
+        typer.echo(f"signal: {job.signal_path}")
+        typer.echo(f"latest: {job.latest_path}")
+        for result in job.webhook_results:
+            typer.echo(render_webhook_result(result))
+        typer.echo(ORDERS_NOTE)
+
+
+@app.command(name="propose")
+def propose_command(
+    signal: Annotated[
+        Path | None,
+        typer.Option("--signal", help="Signal file (default: <jobs-dir>/signal_latest.json)"),
+    ] = None,
+    jobs_dir: JobsDirOpt = None,
+    equity: Annotated[
+        float | None, typer.Option("--equity", help="Account equity to size against, in dollars")
+    ] = None,
+    paper_equity: Annotated[
+        bool,
+        typer.Option("--paper-equity", help="Read equity from the Alpaca paper account"),
+    ] = False,
+    paper_positions: Annotated[
+        bool,
+        typer.Option(
+            "--paper-positions",
+            help="Read current positions from the Alpaca paper account (default: assume flat)",
+        ),
+    ] = False,
+    rule: RuleOpt = None,
+    max_gross: Annotated[
+        float | None,
+        typer.Option("--max-gross", help="Gross exposure cap as a fraction of equity"),
+    ] = None,
+    allow_short: Annotated[
+        bool | None,
+        typer.Option("--allow-short/--no-short", help="Allow negative target positions"),
+    ] = None,
+    json_output: JsonOpt = False,
+    config: ConfigOpt = None,
+) -> None:
+    """Turn the latest signal file into a paper allocation and print the proposed orders.
+
+    Nothing is submitted. The output is a proposal for a human to review; placing an
+    order is a separate, explicit action outside this tool. Prices are the signal file's
+    last closes. Exactly one of --equity / --paper-equity is required.
+    """
+    try:
+        cfg = load_config(config)
+        if (equity is None) == (not paper_equity):
+            raise ValueError("Provide exactly one of --equity AMOUNT or --paper-equity.")
+        from hedgefund.paper import sizing  # lazy: alpaca-py is optional
+
+        jobs_dir_used = jobs_dir if jobs_dir is not None else DEFAULT_JOBS_DIR
+        signal_path = signal if signal is not None else jobs_dir_used / LATEST_FILE
+        signal_data = read_signal(signal_path)
+        rule_used = _validate_rule(
+            str(
+                rule
+                if rule is not None
+                else signal_data.get("rule", _config_value(cfg, "backtest", "rule"))
+            )
+        )
+        max_gross_used = float(
+            max_gross
+            if max_gross is not None
+            else _config_get(cfg, "paper", "max_gross", default=DEFAULT_PAPER_MAX_GROSS)
+        )
+        allow_short_used = bool(
+            allow_short
+            if allow_short is not None
+            else _config_get(cfg, "paper", "allow_short", default=DEFAULT_PAPER_ALLOW_SHORT)
+        )
+        min_notional = float(
+            _config_get(
+                cfg, "paper", "min_trade_notional", default=DEFAULT_PAPER_MIN_TRADE_NOTIONAL
+            )
+        )
+        prices = {
+            symbol: float(entry["last_close"])
+            for symbol, entry in signal_data["symbols"].items()
+            if entry.get("last_close") is not None
+        }
+        equity_used = float(equity) if equity is not None else float(sizing.paper_account_equity())
+        positions = sizing.paper_positions() if paper_positions else None
+        proposal = sizing.propose_orders(
+            signal_data,
+            equity=equity_used,
+            prices=prices,
+            current_positions=positions,
+            rule=rule_used,
+            max_gross=max_gross_used,
+            allow_short=allow_short_used,
+            min_trade_notional=min_notional,
+        )
+    except Exception as exc:
+        _fail(exc, json_output)
+
+    if json_output:
+        typer.echo(json.dumps(proposal.to_dict()))
+    else:
+        typer.echo(sizing.render_proposal(proposal))
 
 
 @app.command(name="report")
