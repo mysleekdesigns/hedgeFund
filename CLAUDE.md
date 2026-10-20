@@ -18,6 +18,6 @@ Python research platform for Markov regime detection (Bull / Bear / Sideways) wi
 ## Where things live
 
 - `.claude/rules/` holds path-scoped conventions (Python, testing, data sources, no-lookahead, Pine, JSON contract).
-- Skills: `/phase-status`, `/run-gate`, `/commit-phase`, plus background knowledge in `markov-regime-method` and `honest-backtesting`.
-- Subagents: `quant-reviewer` (read-only adversarial review), `gate-runner`, `test-debugger`, `quant-researcher`.
+- Skills: `/next-phase` (work the next plan phase with parallel subagents, then commit, push, merge everywhere), `/phase-status`, `/run-gate`, `/commit-phase`, plus background knowledge in `markov-regime-method` and `honest-backtesting`.
+- Subagents: `phase-implementer` (parallel workers), `quant-reviewer` (read-only adversarial review), `gate-runner`, `test-debugger`, `quant-researcher`.
 - Hooks in `.claude/settings.json` block secrets, destructive git, live Alpaca endpoints, and order-placing MCP tools; they format Python after edits and run the test gate before a turn ends.
