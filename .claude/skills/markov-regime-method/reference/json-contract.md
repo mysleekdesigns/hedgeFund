@@ -6,6 +6,7 @@
 - Phase 2 additions (shipped)
 - Phase 3 additions (shipped)
 - Phase 4 additions (shipped)
+- Phase 5 additions (shipped): scan output and run files
 - Planned additions by phase
 - Serialisation rules
 
@@ -111,9 +112,64 @@ The HMM is fitted walk-forward (plan.md Fix 5): a multi-restart, full-covariance
 | `pnl_comparison` | obj | Net and gross P&L of each detector (plan.md Fix 5 "Comparison"). On the dates both label series share and for which the next close exists, each detector holds the sign rule on its **held** regime at `t` (Bull +1, Bear −1, Sideways 0) and earns the close-to-close simple return of `t+1`; the last common date drops. `threshold` and `hmm` each carry `gross` and `net` Phase 3 metric sets (same keys as `backtest.gross`, without `psr` / `min_track_record`); net applies the same cost model to both through `apply_costs`. `buy_and_hold` carries `net` only, charged like the Phase 3 benchmark (constant +1 pays the entry cost and funding). `costs` echoes `fee_bps`, `slippage_bps`, `borrow_bps`, `funding_bps`, `per_side_bps`; `n_days` (int), `first_date`, `last_date` (ISO or `null`), `rule` (says this is a direct regime-position comparison, not the Phase 3 matrix-signal walk-forward) and `note`. With fewer than 2 common dates every metric is `null` and `n_days` is 0; never NaN |
 | `note` | str | Says every refit uses bars strictly before the decision date and that the probabilities are filtered, not smoothed |
 
+## Phase 5 additions (shipped): scan output and run files
+
+Phase 5 does not change the `analyze` object. It adds a second JSON object, printed by `hedgefund scan --universe <name|path> --json` (`hedgefund.jobs.scan.scan_json`), and three kinds of file under `jobs/<run_id>/` that `hedgefund report <run-id>` reads back. Every per-symbol result file holds the unchanged `analyze` dict, so everything above applies to it verbatim. Values are JSON numbers, strings, lists, objects or `null`; the table and the manifest never carry NaN.
+
+`run_id` is `<YYYYMMDDTHHMMSSZ>_<universe>` in UTC (`new_run_id`), so ids sort chronologically. A run directory holds `manifest.json`, `table.json` and `results/<symbol>.json` (one per symbol that succeeded; path-unsafe characters in the symbol become `-`). `jobs/` is git-ignored.
+
+### `hedgefund scan --json` object
+
+| Field | Type | Meaning |
+|---|---|---|
+| `run_id` | str | The run written, as above |
+| `run_dir` | str | Absolute or cwd-relative path of `jobs/<run_id>` |
+| `universe` | str | `name` of the universe file |
+| `cost_profile` | str | The `costs.profiles` key every symbol was charged (from the universe file) |
+| `symbols` | list[str] | Every symbol of the universe in file order, including the ones that failed |
+| `table` | list[obj] | The ranked table, same rows as `table.json` (below) |
+| `errors` | obj | `symbol -> message` for the symbols whose fetch or analysis raised `ValueError` (too little history, a missing CSV) or `LookupError` (a `CacheMissError` under `--offline`); successful symbols are absent. The scan continues past them. Any other exception aborts the scan, but `manifest.json` and `table.json` are still written for the symbols finished so far, so a run directory is never results-only |
+| `framework` | str | As in the companion |
+| `disclaimer` | str | `"Backtests are historical, not forward-looking."` |
+
+### `table.json` rows (`hedgefund.jobs.scan.TABLE_COLUMNS`)
+
+One object per symbol, already sorted: net Sharpe descending, then rows whose net Sharpe is `null`, then errored rows; ties by symbol. Ranking by **net** Sharpe keeps the gross-never-alone rule (rules/no-lookahead.md).
+
+| Field | Type | Meaning |
+|---|---|---|
+| `rank` | int or null | 1..n over the non-errored rows (a `null` Sharpe still gets a rank, after the scored rows); `null` for an errored row |
+| `symbol` | str | |
+| `current_regime` | str or null | `analyze.current_regime` (`Bear`, `Sideways`, `Bull`) |
+| `signal` | float or null | `analyze.signal` |
+| `persistence` | float or null | Diagonal of the **current** regime from `stride_diagonal` (window-step, overlap-free; plan.md Fix 1). When that stride entry is `null` (the regime never occurs as a source in `labels[::window]`) it falls back to `persistence_diagonal` (overlapping 1-step) |
+| `persistence_source` | str or null | `"stride"` or `"overlapping"`: which diagonal `persistence` came from. The plain-text table marks an overlapping fallback with `*` |
+| `stationary_bear` | float or null | `analyze.stationary_distribution.bear`: the long-run bear share implied by the current matrix, not a forecast |
+| `net_sharpe` | float or null | `analyze.backtest.net.sharpe`; `null` when the history is too short for the walk-forward |
+| `null_percentile` | float or null | `analyze.backtest.null.permutation.percentile_net`; `null` when `backtest.null` is `null` |
+| `rows`, `date_end` | int / str or null | `analyze.rows`, `analyze.date_end` |
+| `error` | str or null | The `ValueError` message for a failed symbol; every other column of that row is `null` except `symbol` |
+
+### `manifest.json` (`hedgefund.jobs.manifest.RunManifest.to_dict`)
+
+| Field | Type | Meaning |
+|---|---|---|
+| `run_id` | str | |
+| `created_at` | str | ISO 8601 UTC with offset, e.g. `2026-10-20T09:00:00+00:00` |
+| `universe`, `universe_file`, `cost_profile` | str | The universe's `name`, the YAML path it was loaded from, its `cost_profile` |
+| `symbols` | list[str] | Universe order, including failed symbols |
+| `params` | obj | Every `analyze` keyword the scan passed (`window`, `threshold`, `min_train`, `hmm`, `null_paths`, `bootstrap_resamples`, `seed`, ..., exactly the set the CLI built; tuples become lists) plus `cost_model` (`fee_bps`, `slippage_bps`, `borrow_bps`, `funding_bps`) |
+| `data` | obj | `symbol -> {source, start, end, rows, sha256, cache_path, cache_hit, result_file}`. Keys are the **raw** symbol (`BTC/USD`); `result_file` is the sanitised file name under `results/` (`BTC-USD.json`, path-unsafe characters replaced by `-`) or `null` when the symbol produced no result. `read_results` maps those files back to the raw symbols through this list. `sha256` is the hex digest of the price frame (index as int64 ns plus float64 close bytes, `hedgefund.data.cache.frame_digest`), so two runs on identical data share hashes. With a `CachedSource` the entry comes from its cache event: `start` / `end` are the cache key's window, `cache_path` the parquet file, `cache_hit` whether it was served without the inner source. With a plain source `start` / `end` are the frame's first and last dates and `cache_path` / `cache_hit` are `null`. A symbol whose fetch raised has no entry; one whose analysis raised still has its data entry |
+| `hedgefund_version` | str | `hedgefund.__version__` |
+| `git_commit` | str or null | `git rev-parse HEAD` at scan time; `null` when git is unavailable |
+| `errors` | obj | Same as the scan object's `errors` |
+| `disclaimer` | str | `"Backtests are historical, not forward-looking."` |
+
+`hedgefund report <run-id> --json` prints `{"run_id", "html"}` with the path of the regenerated `html/index.html`.
+
 ## Planned additions by phase
 
-Additive only. Keep names stable once shipped. Phase 4 has shipped; later phases add top-level keys only.
+Additive only. Keep names stable once shipped. Phase 5 has shipped; later phases add top-level keys only.
 
 ## Serialisation rules
 

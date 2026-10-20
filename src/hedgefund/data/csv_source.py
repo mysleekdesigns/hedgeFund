@@ -142,3 +142,46 @@ class CsvSource:
         if frame.empty:
             raise ValueError(f"{symbol} has no rows between {start} and {end}.")
         return validate_price_frame(frame)
+
+
+class CsvDirSource:
+    """``PriceSource`` over a directory of CSVs; ``symbol`` resolves to ``<dir>/<symbol>.csv``.
+
+    This is the CSV counterpart of ``YFinanceSource`` for the scan: a universe file lists
+    symbols and this source maps each to a file. File names are used as given, so a
+    symbol like ``BTC/USD`` must be stored under the name the universe uses.
+    """
+
+    name = "csv"
+
+    def __init__(self, directory: Path | str) -> None:
+        self.directory = Path(directory)
+
+    def path_for(self, symbol: str) -> Path:
+        """Return the CSV path ``symbol`` maps to."""
+        return self.directory / f"{symbol}.csv"
+
+    def fingerprint(self, symbol: str) -> str | None:
+        """Return a short sha256 of the CSV's bytes, or ``None`` when the file is absent.
+
+        ``CachedSource`` folds this into its key so an edited CSV is a cache miss rather
+        than a stale hit under the same date window.
+        """
+        from hedgefund.data.cache import file_fingerprint
+
+        path = self.path_for(symbol)
+        if not path.is_file():
+            return None
+        return file_fingerprint(path)
+
+    def get_daily(
+        self,
+        symbol: str,
+        start: pd.Timestamp | None = None,
+        end: pd.Timestamp | None = None,
+    ) -> pd.DataFrame:
+        """Return the validated frame for ``symbol``; a missing file raises ``ValueError``."""
+        path = self.path_for(symbol)
+        if not path.is_file():
+            raise ValueError(f"no CSV for symbol {symbol!r}: {path} does not exist")
+        return CsvSource().get_daily(str(path), start, end)

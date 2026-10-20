@@ -381,14 +381,14 @@ Progress key: `[x]` done, `[ ]` not started. Each phase ends with an acceptance 
 
 ### Phase 5 — Multi-asset scan and reports (1 day)
 
-- [ ] Add `config/universes/us_etfs.yaml` and `config/universes/crypto.yaml`.
-- [ ] Add `data/cache.py`: parquet cache under `./cache`, keyed by source, symbol, and date range.
-- [ ] Add `hedgefund scan --universe <file>` running the full pipeline per symbol.
-- [ ] Ranked scan table: current regime, signal, persistence, stationary bear share, net Sharpe, null percentile.
-- [ ] Add `report/html.py`: matrix heatmap, regime ribbon over price, equity curve vs benchmarks, CI bars.
-- [ ] Write run manifests (parameters, data hashes, timestamps) to `./jobs`.
-- [ ] Add `hedgefund report <run-id>` to regenerate HTML from a cached run.
-- [ ] Test: scan on a two-symbol universe produces two cached runs and one ranked table.
+- [x] Add `config/universes/us_etfs.yaml` and `config/universes/crypto.yaml`.
+- [x] Add `data/cache.py`: parquet cache under `./cache`, keyed by source, symbol, and date range.
+- [x] Add `hedgefund scan --universe <file>` running the full pipeline per symbol.
+- [x] Ranked scan table: current regime, signal, persistence, stationary bear share, net Sharpe, null percentile.
+- [x] Add `report/html.py`: matrix heatmap, regime ribbon over price, equity curve vs benchmarks, CI bars.
+- [x] Write run manifests (parameters, data hashes, timestamps) to `./jobs`.
+- [x] Add `hedgefund report <run-id>` to regenerate HTML from a cached run.
+- [x] Test: scan on a two-symbol universe produces two cached runs and one ranked table.
 
 **Gate:** a scan over the ETF universe completes from cold cache and again from warm cache, with the warm run making no network calls.
 

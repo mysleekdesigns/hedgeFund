@@ -66,6 +66,34 @@ uv sync --extra alpaca      # alpaca-py for Alpaca market data (paper endpoint o
 uv sync --extra dashboard   # streamlit for the local dashboard
 ```
 
+## Scan and report
+
+`hedgefund scan` runs the full `analyze` pipeline over every symbol of a universe and ranks the results. `hedgefund report` regenerates the HTML of a finished run without fetching anything.
+
+```
+uv run hedgefund scan --universe us_etfs                 # cold run: fetches, caches, analyses, ranks, renders HTML
+uv run hedgefund scan --universe us_etfs --offline       # warm run: served from the cache; a miss is an error
+uv run hedgefund scan --universe crypto --json           # one JSON object: run_id, table, html path, ...
+uv run hedgefund scan --universe my.yaml --source csv --csv-dir data/   # your own <SYMBOL>.csv files
+uv run hedgefund report 20260101T120000Z_us_etfs         # rewrite jobs/<run-id>/html/ from the cached run
+```
+
+`--universe` is a name under `config/universes/` or a path to a YAML file with `name`, `cost_profile` and `symbols`; the cost profile comes from that file. The analysis flags of `analyze` (`--window`, `--threshold`, `--min-train`, `--no-hmm`, `--null-paths`, `--seed`, `--refit`, `--rule`, ...) apply to every symbol. `--no-html` skips the report.
+
+Layout written by a scan:
+
+```
+cache/<source>/<SYMBOL>_<start>_<end>.parquet   # one validated daily frame per symbol and date window
+jobs/<run-id>/manifest.json                     # parameters, per-symbol data hashes, cache paths, cache hits, errors
+jobs/<run-id>/results/<SYMBOL>.json             # the full analyze JSON per symbol
+jobs/<run-id>/table.json                        # the ranked table
+jobs/<run-id>/html/index.html, <SYMBOL>.html    # heatmap, regime ribbon, equity curves, CI bars
+```
+
+To check the cache is warm, run the same scan again with `--offline`: it must succeed, and every `cache_hit` in the new manifest must be `true`. A missing cache file makes `--offline` fail naming the symbol, and `report` fails the same way when a run's cached frame has been deleted; re-run the scan to refresh it.
+
+Backtests are historical, not forward-looking. A ranked table is a research artefact, not a trade list; nothing here places orders.
+
 ## Configuration
 
 `config/default.yaml` holds the defaults. CLI flags override them. `config/universes/*.yaml` list symbols and their cost profiles.
