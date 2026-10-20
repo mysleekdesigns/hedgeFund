@@ -1,0 +1,72 @@
+[project]
+name = "hedgefund"
+version = "0.1.0"
+description = "Markov regime detection (Bull / Bear / Sideways) with honest, no-lookahead backtests"
+readme = "README.md"
+license = "MIT"
+authors = [
+    { name = "mysleekdesigns" }
+]
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "numpy>=2.5.4",
+    "pandas>=3.0.6",
+    "pyarrow>=26.0.0",
+    "pyyaml>=6.0.3",
+    "rich>=15.0.0",
+    "scipy>=1.18.1",
+    "typer>=0.27.3",
+    "yfinance>=1.7.0",
+]
+
+[project.optional-dependencies]
+hmm = [
+    "hmmlearn>=0.3.3",
+]
+alpaca = [
+    "alpaca-py>=0.44.0",
+]
+dashboard = [
+    "streamlit>=1.66.0",
+]
+
+[project.scripts]
+hedgefund = "hedgefund.cli:main"
+
+[build-system]
+requires = ["uv_build>=0.11.6,<0.12.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "hypothesis>=6.170.4",
+    "pre-commit>=4.7.0",
+    "pytest>=9.1.1",
+    "ruff>=0.17.1",
+]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+src = ["src", "tests"]
+extend-exclude = ["cache", ".venv"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "N", "SIM", "RUF"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["hedgefund"]
+
+[tool.ruff.format]
+quote-style = "double"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra --strict-markers"
+markers = [
+    "slow: permutation/bootstrap tests that need N >= 1000; run a small N by default",
+]
+filterwarnings = [
+    "error::DeprecationWarning:hedgefund.*",
+]
+xfail_strict = true

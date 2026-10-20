@@ -1,0 +1,3 @@
+name: crypto
+cost_profile: crypto    # matches costs.profiles.crypto in config/default.yaml
+symbols: [BTC-USD, ETH-USD, SOL-USD]   # yfinance symbol style; Alpaca source maps to BTC/USD etc.

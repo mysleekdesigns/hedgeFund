@@ -276,15 +276,15 @@ Progress key: `[x]` done, `[ ]` not started. Each phase ends with an acceptance 
 - [x] Smoke run on SPY 10y succeeded (Sharpe 0.244, max DD −33.9%, Sideways persistence 93.0%).
 
 **To do**
-- [ ] `uv init` in the project root, pin Python 3.12 in `pyproject.toml`.
-- [ ] Add dependencies: numpy, pandas, scipy, yfinance, pyarrow, pyyaml, typer, rich.
-- [ ] Add optional extras: `hmm` (hmmlearn), `alpaca` (alpaca-py), `dashboard` (streamlit).
-- [ ] Add dev dependencies: pytest, hypothesis, ruff, pre-commit.
-- [ ] Create the package layout from section 3 (`src/hedgefund/...`) with empty `__init__.py` files.
-- [ ] Create `config/default.yaml` with the defaults from section 5.
-- [ ] Create `tests/fixtures/` and freeze a SPY 10y close series as parquet (the reproduction baseline).
-- [ ] Write `README.md` with the educational-use disclaimer from the video.
-- [ ] Configure ruff, pytest, and pre-commit; confirm `uv run pytest` runs with zero tests.
+- [x] `uv init` in the project root, pin Python 3.12 in `pyproject.toml`.
+- [x] Add dependencies: numpy, pandas, scipy, yfinance, pyarrow, pyyaml, typer, rich.
+- [x] Add optional extras: `hmm` (hmmlearn), `alpaca` (alpaca-py), `dashboard` (streamlit).
+- [x] Add dev dependencies: pytest, hypothesis, ruff, pre-commit.
+- [x] Create the package layout from section 3 (`src/hedgefund/...`) with empty `__init__.py` files.
+- [x] Create `config/default.yaml` with the defaults from section 5.
+- [x] Create `tests/fixtures/` and freeze a SPY 10y close series as parquet (the reproduction baseline).
+- [x] Write `README.md` with the educational-use disclaimer from the video.
+- [x] Configure ruff, pytest, and pre-commit; confirm `uv run pytest` runs with zero tests.
 
 **Gate:** `uv run pytest` and `uv run ruff check .` both pass on the empty scaffold.
 

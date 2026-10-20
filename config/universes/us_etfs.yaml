@@ -1,0 +1,3 @@
+name: us_etfs
+cost_profile: us_etfs   # matches costs.profiles.us_etfs in config/default.yaml
+symbols: [SPY, QQQ, IWM, DIA, TLT, GLD, XLF, XLE, XLK, EEM]   # liquid US ETFs across equity, bonds, gold, sectors, EM

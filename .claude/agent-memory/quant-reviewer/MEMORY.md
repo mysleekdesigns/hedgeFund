@@ -1,0 +1,1 @@
+- [Phase 0 review context](phase0-review-context.md) — uv cache env var, companion script path, SPY fixture quirks, plan cost inconsistency, ruff N806/B008 friction

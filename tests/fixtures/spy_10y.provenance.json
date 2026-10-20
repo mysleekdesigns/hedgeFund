@@ -1,0 +1,26 @@
+{
+  "ticker": "SPY",
+  "source": "yfinance",
+  "download_kwargs": {
+    "start": "2016-10-20",
+    "end": "2026-10-20",
+    "auto_adjust": true
+  },
+  "pulled_at_utc": "2026-10-20T00:18:30+00:00",
+  "rows": 2511,
+  "first_date": "2016-10-20",
+  "last_date": "2026-10-16",
+  "columns": [
+    "open",
+    "high",
+    "low",
+    "close",
+    "volume"
+  ],
+  "sha256": "554f015efd3e0b12d17c3ef6cd0a8db218eb15581fd333dc8ec29a71d6e3ad19",
+  "versions": {
+    "yfinance": "1.7.0",
+    "pandas": "3.0.6",
+    "pyarrow": "26.0.0"
+  }
+}
