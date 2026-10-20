@@ -4,10 +4,14 @@
 companion's stdout; ``print_pretty`` writes it unchanged. When the dict carries the
 Phase 2 fields (``stride_matrix`` present) an "Honest statistics" section is inserted
 between the HMM block and the footer; a dict without them renders the companion text
-unchanged.
+unchanged. When it carries the Phase 3 ``backtest`` block a "Backtest (Phase 3)" section
+follows, always showing gross and net side by side with the cost assumption stated
+(``.claude/rules/no-lookahead.md``). ``render_backtest`` prints the slim dict behind
+``hedgefund backtest``: header, the same section, footer. Any ``None`` value prints ``n/a``.
 """
 
 import math
+from collections.abc import Callable
 
 from hedgefund.regime.labels import STATES
 
@@ -25,6 +29,42 @@ NULL_OVERLAP_CAVEAT = (
     "  These two nulls ignore the window overlap, so 100 is expected for any smoothed "
     "labeller; the labeller-induced null below is the honest comparison."
 )
+
+BACKTEST_HEADER = "Backtest (Phase 3):"
+BACKTEST_METRIC_ROWS = [  # (label, metric key, formatter) for the gross vs net table
+    ("Sharpe (annualised)", "sharpe", "num"),
+    ("Sortino", "sortino", "num"),
+    ("Calmar", "calmar", "num"),
+    ("Max drawdown", "max_drawdown", "pct"),
+    ("Total return", "total_return", "pct"),
+    ("Annual return", "annual_return", "pct"),
+    ("Hit rate", "hit_rate", "pct"),
+    ("Profit factor", "profit_factor", "num"),
+    ("PSR (P[true Sharpe > 0])", "psr", "num"),
+    ("Min track record (days)", "min_track_record", "days"),
+]
+BENCHMARK_ROWS = [  # (label, key under backtest.benchmarks); the strategy row comes first
+    ("buy-and-hold", "buy_and_hold"),
+    ("constant 50%", "constant_50"),
+    ("long-only", "long_only"),
+]
+NULL_ROWS = [  # (label, key under backtest.null); each entry carries gross and net keys
+    ("random-sign", "random_sign"),
+    ("label-shuffle", "label_shuffle"),
+    ("permutation", "permutation"),
+]
+DSR_HYBRID_CAVEAT = (
+    "  Conservative hybrid, not textbook DSR: PSR of the default cell's full-sample net "
+    "returns against SR0 from the in-sample grid; the default cell is not the argmax and "
+    "its sample is longer than the grid cells'."
+)
+LAG_LABELLER_LABELS = {
+    "threshold": "threshold (plain)",
+    "zscore": "z-score",
+    "ew": "EW return",
+    "ensemble": "ensemble",
+    "hysteresis": "hysteresis",
+}
 
 FOOTER = [
     "",
@@ -119,7 +159,26 @@ def render(result: dict) -> str:
 
     if "stride_matrix" in a:
         lines.extend(_honest_statistics_lines(a))
+    if "backtest" in a:
+        lines.extend(_backtest_lines(a["backtest"]))
 
+    lines.extend(FOOTER)
+    return "\n".join(lines) + "\n"
+
+
+def render_backtest(result: dict) -> str:
+    """Pretty text for a ``backtest_only()`` dict: header, the backtest section, footer."""
+    a = result
+    lines: list[str] = [
+        "",
+        (
+            f"markov-regime backtest — source={a['source']} "
+            f"window={a['params']['window']} threshold={a['params']['threshold']} "
+            f"min_train={a['params']['min_train']}"
+        ),
+        f"  {a['rows']} rows | {a['date_start']} -> {a['date_end']}",
+    ]
+    lines.extend(_backtest_lines(a["backtest"]))
     lines.extend(FOOTER)
     return "\n".join(lines) + "\n"
 
@@ -276,6 +335,213 @@ def _honest_statistics_lines(a: dict) -> list[str]:
     return lines
 
 
+def _get(node: dict | None, *keys: str) -> object:
+    """Walk nested dict keys, returning ``None`` as soon as a level is missing or ``None``."""
+    for key in keys:
+        if not isinstance(node, dict):
+            return None
+        node = node.get(key)
+    return node
+
+
+def _days(value: object) -> str:
+    """A track-record length in whole days, ``n/a`` for ``None`` (undefined or infinite)."""
+    return f"{value:.0f}" if _is_finite(value) else NA
+
+
+def _count(value: object) -> str:
+    """An integer count, ``n/a`` for ``None``."""
+    return str(int(value)) if _is_finite(value) else NA
+
+
+def _lag_pair(entry: dict | None, key: str, fmt: Callable[[object], str]) -> str:
+    """``crash/recovery`` values of one lag statistic; ``n/a`` for a missing labeller.
+
+    Uses ``.get`` semantics through ``_get`` so a key the lag module does not emit yet
+    (``n_flips``, ``false_flips``, ``false_flip_rate``) prints ``n/a/n/a`` instead of raising.
+    """
+    if entry is None:
+        return NA
+    return f"{fmt(_get(entry, 'crash', key))}/{fmt(_get(entry, 'recovery', key))}"
+
+
+def _fmt(value: object, kind: str) -> str:
+    if kind == "pct":
+        return _pct(value)
+    if kind == "days":
+        return _days(value)
+    return _num(value, 3)
+
+
+def _backtest_lines(bt: dict) -> list[str]:
+    """The Phase 3 section: costs, gross vs net, benchmarks, nulls, PSR/DSR, holdout,
+    cost sensitivity, the window x threshold heatmap and the lag diagnostic."""
+    lines: list[str] = []
+    params = bt["params"]
+    costs = params["costs"]
+    gross, net = bt["gross"], bt["net"]
+
+    lines.append("")
+    lines.append(BACKTEST_HEADER)
+    lines.append(
+        f"  Costs: {_num(costs['per_side_bps'], 1)} bps per side "
+        f"(fee {_num(costs['fee_bps'], 1)} + slippage {_num(costs['slippage_bps'], 1)}), "
+        f"borrow {_num(costs['borrow_bps'], 0)} bps/yr on shorts, "
+        f"funding {_num(costs['funding_bps'], 0)} bps/yr on gross notional; "
+        f"annual cost drag {_pct(bt['annual_cost'])}"
+    )
+    rolling = f" ({params['rolling_bars']} bars)" if params["refit"] == "rolling" else ""
+    lines.append(
+        f"  Rule: {params['rule']}, refit {params['refit']}{rolling}, "
+        f"dead band {_num(params['dead_band'], 2)}, {net['n_days']} days evaluated"
+    )
+    lines.append(f"  {'':<26s}{'gross':>12s}{'net':>12s}")
+    for label, key, kind in BACKTEST_METRIC_ROWS:
+        lines.append(f"  {label:<26s}{_fmt(gross[key], kind):>12s}{_fmt(net[key], kind):>12s}")
+    lines.append(
+        f"  Turnover (one-way notional per year): {_num(net['turnover'], 1)} | "
+        f"time in market: {_pct(net['time_in_market'])}"
+    )
+
+    lines.append("")
+    lines.append("Benchmarks (net of the same costs):")
+    lines.append(f"  {'':<14s}{'sharpe':>10s}{'max DD':>10s}{'total':>10s}{'turnover':>10s}")
+    rows = [("strategy net", net)] + [
+        (label, bt["benchmarks"][key]) for label, key in BENCHMARK_ROWS
+    ]
+    for label, m in rows:
+        lines.append(
+            f"  {label:<14s}{_num(m['sharpe'], 3):>10s}{_pct(m['max_drawdown']):>10s}"
+            f"{_pct(m['total_return']):>10s}{_num(m['turnover'], 1):>10s}"
+        )
+    lines.append(f"  {bt['benchmarks']['note']}")
+
+    null = bt["null"]
+    lines.append("")
+    n_paths = _get(null, "random_sign", "n_paths")
+    paths = f"{n_paths} paths" if n_paths is not None else "no paths (history too short)"
+    lines.append(
+        f"Null models of the Sharpe, gross and net percentile side by side ({paths}; "
+        "100 = above every null draw):"
+    )
+    lines.append(
+        f"  {'':<16s}{'gross pct':>10s}{'gross p':>9s}{'net pct':>10s}{'net p':>9s}"
+        f"{'null turnover':>15s}"
+    )
+    for label, key in NULL_ROWS:
+        entry = _get(null, key)
+        lines.append(
+            f"  {label:<16s}{_num(_get(entry, 'percentile_gross'), 1):>10s}"
+            f"{_num(_get(entry, 'p_value_gross'), 4):>9s}"
+            f"{_num(_get(entry, 'percentile_net'), 1):>10s}"
+            f"{_num(_get(entry, 'p_value_net'), 4):>9s}"
+            f"{_num(_get(entry, 'null_mean_turnover'), 1):>15s}"
+        )
+    lines.append(
+        f"  strategy turnover {_num(net['turnover'], 1)}/yr. "
+        "p = (count(null >= real) + 1) / (N + 1); net charges every null path the cost "
+        "model, gross charges nothing. A null that trades far more than the strategy pays "
+        "far more in costs, so read the gross pair first."
+    )
+
+    dsr = bt["dsr"]
+    lines.append("")
+    lines.append(
+        f"Probabilistic Sharpe (net): {_num(bt['psr'], 3)} | Deflated Sharpe: "
+        f"{_num(dsr['dsr'], 3)} against SR0 = {_num(dsr['sr0'], 4)} per day from "
+        f"{dsr['n_trials']} trials of the parameter search"
+    )
+    lines.append(DSR_HYBRID_CAVEAT)
+
+    holdout = bt["holdout"]
+    cutoff = _get(holdout, "cutoff")
+    years = params["holdout_years"]
+    lines.append(
+        f"Holdout ({years}y, from {cutoff if cutoff is not None else NA}): "
+        f"in-sample net Sharpe {_num(_get(holdout, 'in_sample', 'net', 'sharpe'), 3)} "
+        f"({_get(holdout, 'in_sample', 'net', 'n_days') or 0} days) | "
+        f"holdout net Sharpe {_num(_get(holdout, 'holdout', 'net', 'sharpe'), 3)} "
+        f"({_get(holdout, 'holdout', 'net', 'n_days') or 0} days)"
+    )
+    default_w = _get(holdout, "default_cell", "window")
+    default_t = _get(holdout, "default_cell", "threshold")
+    if default_w is None:
+        default_w, default_t = params["window"], params["threshold"]
+    best = bt["sensitivity"]["best"]
+    if best["window"] is not None:
+        best_text = (
+            f"best in-sample cell (window {best['window']}, threshold {best['threshold']}): "
+            f"in-sample net {_num(best['net_sharpe'], 3)}, "
+            f"holdout net {_num(best.get('holdout_net_sharpe'), 3)} "
+            f"(gross {_num(best.get('holdout_gross_sharpe'), 3)})"
+        )
+    else:
+        best_text = "best in-sample cell: n/a (no cell could be scored)"
+    lines.append(
+        f"  The line above scores the default cell (window {default_w}, threshold {default_t}); "
+        f"{best_text}"
+    )
+
+    lines.append("")
+    lines.append("Cost sensitivity (per-side bps -> net):")
+    lines.append(f"  {'bps':>6s}{'sharpe':>10s}{'total':>10s}{'max DD':>10s}{'cost/yr':>10s}")
+    for row in bt["cost_sensitivity"]:
+        lines.append(
+            f"  {row['bps_per_side']:>6d}{_num(row['sharpe'], 3):>10s}"
+            f"{_pct(row['total_return']):>10s}{_pct(row['max_drawdown']):>10s}"
+            f"{_pct(row['annual_cost']):>10s}"
+        )
+
+    sens = bt["sensitivity"]
+    lines.append("")
+    lines.append(
+        f"Sensitivity: in-sample net Sharpe, rows = window, cols = threshold "
+        f"({sens['n_trials']} trials, {_pct(sens['share_positive'])} of cells positive):"
+    )
+    lines.append(f"  {'window':>8s}" + "".join(f"{t:>8.2f}" for t in sens["thresholds"]))
+    for w, row in zip(sens["windows"], sens["net_sharpe"], strict=True):
+        lines.append(f"  {w:>8d}" + "".join(f"{_num(cell, 2):>8s}" for cell in row))
+    best = sens["best"]
+    if best["window"] is not None:
+        lines.append(
+            f"  Best cell: window {best['window']}, threshold {best['threshold']}, "
+            f"net Sharpe {_num(best['net_sharpe'], 3)} (in-sample; the holdout never saw it)"
+        )
+    else:
+        lines.append("  Best cell: n/a (no cell could be scored)")
+
+    lag = bt["lag"]
+    lines.append("")
+    lines.append(
+        f"Detection lag, median bars from turning point to flip (+/-{lag['order']} bar extrema); "
+        "crash/recovery pairs:"
+    )
+    lines.append(
+        f"  {'labeller':<18s}{'crash':>8s}{'recovery':>10s}{'undetected':>12s}{'flips':>12s}"
+        f"{'false flips':>18s}"
+    )
+    for key, label in LAG_LABELLER_LABELS.items():
+        entry = lag.get(key)
+        lines.append(
+            f"  {label:<18s}{_num(_get(entry, 'crash', 'median'), 1):>8s}"
+            f"{_num(_get(entry, 'recovery', 'median'), 1):>10s}"
+            f"{_lag_pair(entry, 'n_undetected', _count):>12s}"
+            f"{_lag_pair(entry, 'n_flips', _count):>12s}"
+            f"{_lag_pair(entry, 'false_flip_rate', _pct):>18s}"
+        )
+    lines.append(
+        "  flips = label flips into Bear (crash) / Bull (recovery); false flips = share of "
+        "those with no turning point in the preceding order bars."
+    )
+    lines.append(f"  Note: {lag['note']}.")
+    return lines
+
+
 def print_pretty(result: dict) -> None:
     """Print the pretty report exactly as the companion script does."""
     print(render(result), end="")
+
+
+def print_backtest(result: dict) -> None:
+    """Print the ``hedgefund backtest`` report."""
+    print(render_backtest(result), end="")

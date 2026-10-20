@@ -19,7 +19,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from hedgefund.backtest.walk_forward import run_walk_forward
+from hedgefund.backtest.walk_forward import WalkForwardResult, run_walk_forward
 from hedgefund.regime.labels import (
     ensemble_label_regimes,
     ew_label_regimes,
@@ -71,15 +71,72 @@ def _labels(close: pd.Series) -> dict[str, pd.Series]:
     return {"labels": label_regimes(close, window=WINDOW, threshold=THRESHOLD)}
 
 
-def _walk_forward(close: pd.Series) -> dict[str, pd.Series]:
-    labels = label_regimes(close, window=WINDOW, threshold=THRESHOLD)
-    result = run_walk_forward(close, labels, min_train=MIN_TRAIN)
+def _walk_forward_outputs(result: WalkForwardResult) -> dict[str, pd.Series]:
     return {
         "signals": result.signals,
         "positions": result.positions,
-        # Indexed by t+1 already: the return earned by the decision at t is knowable at t+1.
+        # Indexed by t+1 already: the return earned by the decision at t is knowable at t+1,
+        # and so is the asset return of t+1 that it multiplies.
         "strategy_returns": result.strategy_returns,
+        "asset_returns": result.asset_returns,
     }
+
+
+def _walk_forward(close: pd.Series, **options: object) -> dict[str, pd.Series]:
+    labels = label_regimes(close, window=WINDOW, threshold=THRESHOLD)
+    return _walk_forward_outputs(run_walk_forward(close, labels, min_train=MIN_TRAIN, **options))
+
+
+# Phase 3 walk-forward variants. The rolling window is far shorter than N_DAYS so
+# transitions really do drop out of the matrix between the cuts; the dead band is wide
+# enough that the conviction position actually holds through small signal moves.
+ROLLING_BARS = 100
+DEAD_BAND = 0.2
+
+
+def _walk_forward_rolling(close: pd.Series) -> dict[str, pd.Series]:
+    return _walk_forward(close, refit="rolling", rolling_bars=ROLLING_BARS)
+
+
+def _walk_forward_conviction(close: pd.Series) -> dict[str, pd.Series]:
+    return _walk_forward(close, rule="conviction")
+
+
+def _walk_forward_persistence(close: pd.Series) -> dict[str, pd.Series]:
+    return _walk_forward(close, rule="persistence")
+
+
+def _walk_forward_long_only(close: pd.Series) -> dict[str, pd.Series]:
+    return _walk_forward(close, rule="long_only")
+
+
+def _walk_forward_dead_band(close: pd.Series) -> dict[str, pd.Series]:
+    return _walk_forward(close, rule="conviction", dead_band=DEAD_BAND)
+
+
+# Review fix W2: the sign rules apply the band as hysteresis on the signal around zero. A
+# 0.1 band is far below the unit step of a sign target, so it only has an effect through
+# that signal-space path.
+SIGNAL_DEAD_BAND = 0.1
+
+
+def _walk_forward_sign_dead_band(close: pd.Series) -> dict[str, pd.Series]:
+    return _walk_forward(close, rule="sign", dead_band=SIGNAL_DEAD_BAND)
+
+
+def _walk_forward_long_only_dead_band(close: pd.Series) -> dict[str, pd.Series]:
+    return _walk_forward(close, rule="long_only", dead_band=SIGNAL_DEAD_BAND)
+
+
+def _walk_forward_rolling_persistence_dead_band(close: pd.Series) -> dict[str, pd.Series]:
+    """Every new option at once, so their interaction is covered too."""
+    return _walk_forward(
+        close,
+        refit="rolling",
+        rolling_bars=ROLLING_BARS,
+        rule="persistence",
+        dead_band=DEAD_BAND,
+    )
 
 
 # Alternative labellers (Phase 2, Fix 3). Each must have at least one knowable value at
@@ -116,6 +173,14 @@ ESTIMATORS: list[tuple[str, Estimator]] = [
     ("ew_label_regimes", _ew_labels),
     ("ensemble_label_regimes", _ensemble_labels),
     ("hysteresis_label_regimes", _hysteresis_labels),
+    ("walk_forward_rolling_refit", _walk_forward_rolling),
+    ("walk_forward_conviction_rule", _walk_forward_conviction),
+    ("walk_forward_persistence_rule", _walk_forward_persistence),
+    ("walk_forward_long_only_rule", _walk_forward_long_only),
+    ("walk_forward_conviction_dead_band", _walk_forward_dead_band),
+    ("walk_forward_sign_dead_band", _walk_forward_sign_dead_band),
+    ("walk_forward_long_only_dead_band", _walk_forward_long_only_dead_band),
+    ("walk_forward_rolling_persistence_dead_band", _walk_forward_rolling_persistence_dead_band),
 ]
 
 
@@ -191,3 +256,38 @@ def test_walk_forward_is_deterministic() -> None:
     b = _walk_forward(close.copy())
     for key in a:
         assert np.array_equal(a[key].to_numpy(), b[key].to_numpy())
+
+
+def test_phase3_variants_have_teeth() -> None:
+    """Each Phase 3 variant must produce positions that differ from the sign rule's, so
+    its perturbation entry above tests a genuinely different code path; the rolling
+    variant must also drop transitions, so its signals differ."""
+    close = synthetic_close()
+    base = _walk_forward(close)
+    rolling = _walk_forward_rolling(close)
+    assert not np.array_equal(base["signals"].to_numpy(), rolling["signals"].to_numpy())
+    for variant in (
+        _walk_forward_conviction,
+        _walk_forward_persistence,
+        _walk_forward_long_only,
+        _walk_forward_dead_band,
+        _walk_forward_sign_dead_band,
+        _walk_forward_long_only_dead_band,
+        _walk_forward_rolling_persistence_dead_band,
+    ):
+        out = variant(close)
+        assert not np.array_equal(base["positions"].to_numpy(), out["positions"].to_numpy())
+    # The dead band actually held a position at least once (fewer changes than no band).
+    banded = _walk_forward_dead_band(close)["positions"].to_numpy()
+    unbanded = _walk_forward_conviction(close)["positions"].to_numpy()
+    assert np.count_nonzero(np.diff(banded)) < np.count_nonzero(np.diff(unbanded))
+    # The signal-space band on the sign rules also holds positions (W2): fewer changes
+    # than the same rule without a band, and the positions stay on the unit grid.
+    for banded_variant, plain_variant, allowed in (
+        (_walk_forward_sign_dead_band, _walk_forward, {-1.0, 0.0, 1.0}),
+        (_walk_forward_long_only_dead_band, _walk_forward_long_only, {0.0, 1.0}),
+    ):
+        banded = banded_variant(close)["positions"].to_numpy()
+        plain = plain_variant(close)["positions"].to_numpy()
+        assert np.count_nonzero(np.diff(banded)) < np.count_nonzero(np.diff(plain))
+        assert set(np.unique(banded)) <= allowed

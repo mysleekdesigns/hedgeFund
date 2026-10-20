@@ -335,28 +335,28 @@ Progress key: `[x]` done, `[ ]` not started. Each phase ends with an acceptance 
 
 ### Phase 3 — Backtester upgrade (1–2 days)
 
-- [ ] Add rolling-window refit mode to the walk-forward (expanding stays the default).
-- [ ] Add position rules: sign-only, conviction-scaled, persistence-weighted, long-only.
-- [ ] Add `backtest/costs.py`: fee bps, slippage bps, short borrow, crypto funding, configurable per universe.
-- [ ] Add turnover and exposure reporting.
-- [ ] Extend `metrics.py`: Sortino, Calmar, hit rate, average win/loss, P&L by holding horizon (1, 5, 10, 20 days).
-- [ ] Add `backtest/benchmarks.py`: buy-and-hold, random-sign null, label-shuffle null (1,000 paths).
-- [ ] Report the strategy's percentile rank against the null paths on every run.
-- [ ] Add lag analysis: average days from a local peak or trough to the label flip.
-- [ ] Report lag as a distribution split by direction (crash versus recovery), per labeller variant. (Fix 3)
-- [ ] Add threshold rebalancing (signal dead-band) to control turnover. (Fix 6)
-- [ ] Add cost sensitivity table at 0, 5, 10, 20 and 50 bps per side. (Fix 6)
-- [ ] Add constant-50%-exposure and long-only benchmarks. (Fix 6)
-- [ ] Add the permutation test: 1,000 shuffles through the full pipeline, p = (count + 1) / (N + 1), with and without costs. (Fix 6)
-- [ ] Add Probabilistic Sharpe and Deflated Sharpe with the number of trials recorded by the parameter search. (Fix 6)
-- [ ] Add the two-year out-of-sample holdout and report it separately. (Fix 6)
-- [ ] Add the window × threshold sensitivity heatmap. (Fix 6)
-- [ ] Add profit factor, minimum track record length and time in market to the metric set. (Fix 6)
-- [ ] Test: on a no-signal synthetic series the permutation p-value is uniform and PSR is near 0.5. (Fix 6)
-- [ ] Add `hedgefund backtest` CLI command with cost and rule flags.
-- [ ] Test: no-lookahead, mutate prices after day t and assert every signal up to t is bit-identical.
-- [ ] Test: with zero costs the sign-only rule reproduces Phase 1 numbers exactly.
-- [ ] Test: costs reduce returns monotonically as bps increase.
+- [x] Add rolling-window refit mode to the walk-forward (expanding stays the default).
+- [x] Add position rules: sign-only, conviction-scaled, persistence-weighted, long-only.
+- [x] Add `backtest/costs.py`: fee bps, slippage bps, short borrow, crypto funding, configurable per universe.
+- [x] Add turnover and exposure reporting.
+- [x] Extend `metrics.py`: Sortino, Calmar, hit rate, average win/loss, P&L by holding horizon (1, 5, 10, 20 days).
+- [x] Add `backtest/benchmarks.py`: buy-and-hold, random-sign null, label-shuffle null (1,000 paths).
+- [x] Report the strategy's percentile rank against the null paths on every run.
+- [x] Add lag analysis: average days from a local peak or trough to the label flip.
+- [x] Report lag as a distribution split by direction (crash versus recovery), per labeller variant. (Fix 3)
+- [x] Add threshold rebalancing (signal dead-band) to control turnover. (Fix 6)
+- [x] Add cost sensitivity table at 0, 5, 10, 20 and 50 bps per side. (Fix 6)
+- [x] Add constant-50%-exposure and long-only benchmarks. (Fix 6)
+- [x] Add the permutation test: 1,000 shuffles through the full pipeline, p = (count + 1) / (N + 1), with and without costs. (Fix 6)
+- [x] Add Probabilistic Sharpe and Deflated Sharpe with the number of trials recorded by the parameter search. (Fix 6)
+- [x] Add the two-year out-of-sample holdout and report it separately. (Fix 6)
+- [x] Add the window × threshold sensitivity heatmap. (Fix 6)
+- [x] Add profit factor, minimum track record length and time in market to the metric set. (Fix 6)
+- [x] Test: on a no-signal synthetic series the permutation p-value is uniform and PSR is near 0.5. (Fix 6)
+- [x] Add `hedgefund backtest` CLI command with cost and rule flags.
+- [x] Test: no-lookahead, mutate prices after day t and assert every signal up to t is bit-identical.
+- [x] Test: with zero costs the sign-only rule reproduces Phase 1 numbers exactly.
+- [x] Test: costs reduce returns monotonically as bps increase.
 
 **Gate:** every backtest report includes costs, turnover, buy-and-hold, and the null percentile; the no-lookahead test passes.
 

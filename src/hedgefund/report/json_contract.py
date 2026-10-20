@@ -8,17 +8,35 @@ script (``float()`` casts, ``str(date)``) so the reproduction test matches to 6 
 Phase 1 added ``params.return_type``. Phase 2 appends the honest-statistics keys listed in
 ``PHASE2_FIELDS`` after ``disclaimer``: stride and run-length persistence (plan.md Fix 1),
 null percentiles, block-bootstrap intervals, rolling / exponentially weighted / shrunk
-matrices with a drift metric (Fix 4), mixing time and the Anderson-Goodman tests. New
-floats are emitted as JSON numbers or ``null``, never NaN.
+matrices with a drift metric (Fix 4), mixing time and the Anderson-Goodman tests. Phase 3
+appends the single key ``backtest`` (``PHASE3_FIELDS``): the cost-aware walk-forward with
+gross and net metric sets, benchmarks, null percentiles, the permutation test, PSR / DSR,
+the two-year holdout, the sensitivity grid and the lag diagnostic
+(``hedgefund.report.backtest_report``). ``backtest_only`` returns the slim dict behind
+``hedgefund backtest``. New floats are emitted as JSON numbers or ``null``, never NaN.
 """
 
 import json
 import math
+from collections.abc import Sequence
 
 import numpy as np
 import pandas as pd
 
-from hedgefund.backtest.walk_forward import walk_forward_backtest
+from hedgefund.backtest.costs import SENSITIVITY_BPS, CostModel
+from hedgefund.backtest.lag import DEFAULT_LAG_ORDER
+from hedgefund.backtest.metrics import DEFAULT_HORIZONS
+from hedgefund.backtest.sensitivity import (
+    DEFAULT_HOLDOUT_YEARS,
+    DEFAULT_SENSITIVITY_THRESHOLDS,
+    DEFAULT_SENSITIVITY_WINDOWS,
+)
+from hedgefund.backtest.walk_forward import (
+    DEFAULT_DEAD_BAND,
+    DEFAULT_REFIT,
+    DEFAULT_ROLLING_BARS,
+    walk_forward_backtest,
+)
 from hedgefund.regime.hmm import hmm_summary
 from hedgefund.regime.labels import BEAR, BULL, SIDEWAYS, STATES, label_regimes
 from hedgefund.regime.markov import (
@@ -48,9 +66,12 @@ from hedgefund.regime.stats import (
     label_shuffle_null,
     labeller_null,
 )
+from hedgefund.report.backtest_report import DEFAULT_RULE, DISCLAIMER, backtest_block
 
 FRAMEWORK = "Roan (@RohOnChain)"
-DISCLAIMER = "Backtests are historical, not forward-looking."
+# ``DISCLAIMER`` is defined in ``backtest_report`` (the block carries it too) and
+# re-exported here so ``from hedgefund.report.json_contract import DISCLAIMER`` keeps working.
+__all__ = ["DISCLAIMER", "FRAMEWORK", "analyze", "backtest_only", "to_json"]
 
 # Top-level keys of the companion dict, in the companion's emission order.
 COMPANION_FIELDS = [
@@ -94,6 +115,10 @@ PHASE2_FIELDS = [
     "tests",
     "statistics_params",
 ]
+
+# Phase 3 addition, appended after ``PHASE2_FIELDS``: everything about the cost-aware
+# backtest nests under this one key (``.claude/rules/json-contract.md``).
+PHASE3_FIELDS = ["backtest"]
 
 # Defaults mirror config/default.yaml (plan.md section 5): 20-day window, +/-5% threshold,
 # one trading year of training before the walk-forward starts, simple returns.
@@ -381,6 +406,19 @@ def honest_statistics(
     return {key: out[key] for key in PHASE2_FIELDS}
 
 
+def _labels_or_raise(
+    close: pd.Series, *, window: int, threshold: float, return_type: str
+) -> pd.Series:
+    """Label the series; raise the companion's error when fewer than two days are labelled."""
+    labels = label_regimes(close, window=window, threshold=threshold, return_type=return_type)
+    if len(labels) < MIN_LABELS:
+        raise ValueError(
+            "Not enough data to label regimes — need more rows than the "
+            f"rolling window ({window}). Got {len(close)} price rows."
+        )
+    return labels
+
+
 def analyze(
     close: pd.Series,
     *,
@@ -401,20 +439,30 @@ def analyze(
     # transitions per row for the chi-square approximation
     homogeneity_periods: int = DEFAULT_HOMOGENEITY_PERIODS,
     seed: int = DEFAULT_SEED,  # statistics.seed
+    refit: str = DEFAULT_REFIT,  # backtest.refit
+    backtest_rolling_bars: int = DEFAULT_ROLLING_BARS,  # backtest.rolling_bars
+    rule: str = DEFAULT_RULE,  # backtest.rule
+    dead_band: float = DEFAULT_DEAD_BAND,  # backtest.dead_band
+    cost_model: CostModel | None = None,  # costs.profiles[<universe cost_profile>]; None = us_etfs
+    horizons: Sequence[int] = DEFAULT_HORIZONS,  # backtest.horizons
+    holdout_years: int = DEFAULT_HOLDOUT_YEARS,  # backtest.holdout_years
+    sensitivity_windows: Sequence[int] = DEFAULT_SENSITIVITY_WINDOWS,  # backtest.sensitivity
+    sensitivity_thresholds: Sequence[float] = DEFAULT_SENSITIVITY_THRESHOLDS,
+    cost_sensitivity_bps: Sequence[int] = SENSITIVITY_BPS,  # backtest.cost_sensitivity_bps
+    lag_order: int = DEFAULT_LAG_ORDER,  # backtest.lag_order
 ) -> dict:
-    """Run the whole framework and return the companion's dict plus the Phase 2 fields.
+    """Run the whole framework: companion dict, Phase 2 statistics, Phase 3 ``backtest``.
 
     The companion keys come first and are computed exactly as the companion script does;
-    the honest statistics (``PHASE2_FIELDS``) follow. Raises ``ValueError`` when the
-    series is too short to label at least two days.
+    the honest statistics (``PHASE2_FIELDS``) follow, then ``backtest`` (``PHASE3_FIELDS``).
+    ``rolling_bars`` is the Phase 2 rolling-matrix window (``statistics.rolling_bars``);
+    the walk-forward's rolling refit window is ``backtest_rolling_bars``
+    (``backtest.rolling_bars``) because the two are separate config keys. The backtest
+    block shares ``null_paths`` and ``seed`` with the statistics. Raises ``ValueError``
+    when the series is too short to label at least two days.
     """
     close = close.dropna()
-    labels = label_regimes(close, window=window, threshold=threshold, return_type=return_type)
-    if len(labels) < MIN_LABELS:
-        raise ValueError(
-            "Not enough data to label regimes — need more rows than the "
-            f"rolling window ({window}). Got {len(close)} price rows."
-        )
+    labels = _labels_or_raise(close, window=window, threshold=threshold, return_type=return_type)
 
     matrix = build_transition_matrix(labels)
     pi = stationary_distribution(matrix)
@@ -483,7 +531,97 @@ def analyze(
         homogeneity_periods=homogeneity_periods,
         seed=seed,
     )
-    return {**companion, **statistics}
+    backtest = backtest_block(
+        close,
+        labels,
+        window=window,
+        threshold=threshold,
+        return_type=return_type,
+        min_train=min_train,
+        refit=refit,
+        rolling_bars=backtest_rolling_bars,
+        rule=rule,
+        dead_band=dead_band,
+        cost_model=cost_model,
+        horizons=horizons,
+        null_paths=null_paths,
+        seed=seed,
+        holdout_years=holdout_years,
+        sensitivity_windows=sensitivity_windows,
+        sensitivity_thresholds=sensitivity_thresholds,
+        cost_sensitivity_bps=cost_sensitivity_bps,
+        lag_order=lag_order,
+    )
+    return {**companion, **statistics, PHASE3_FIELDS[0]: backtest}
+
+
+def backtest_only(
+    close: pd.Series,
+    *,
+    source: str,
+    window: int = DEFAULT_WINDOW,
+    threshold: float = DEFAULT_THRESHOLD,
+    min_train: int = DEFAULT_MIN_TRAIN,
+    return_type: str = DEFAULT_RETURN_TYPE,
+    null_paths: int = DEFAULT_NULL_PATHS,  # statistics.null_paths
+    seed: int = DEFAULT_SEED,  # statistics.seed
+    refit: str = DEFAULT_REFIT,  # backtest.refit
+    rolling_bars: int = DEFAULT_ROLLING_BARS,  # backtest.rolling_bars
+    rule: str = DEFAULT_RULE,  # backtest.rule
+    dead_band: float = DEFAULT_DEAD_BAND,  # backtest.dead_band
+    cost_model: CostModel | None = None,  # costs.profiles[<universe cost_profile>]; None = us_etfs
+    horizons: Sequence[int] = DEFAULT_HORIZONS,  # backtest.horizons
+    holdout_years: int = DEFAULT_HOLDOUT_YEARS,  # backtest.holdout_years
+    sensitivity_windows: Sequence[int] = DEFAULT_SENSITIVITY_WINDOWS,  # backtest.sensitivity
+    sensitivity_thresholds: Sequence[float] = DEFAULT_SENSITIVITY_THRESHOLDS,
+    cost_sensitivity_bps: Sequence[int] = SENSITIVITY_BPS,  # backtest.cost_sensitivity_bps
+    lag_order: int = DEFAULT_LAG_ORDER,  # backtest.lag_order
+) -> dict:
+    """The ``hedgefund backtest`` dict: header fields plus the ``backtest`` block only.
+
+    Returns ``{"source", "rows", "date_start", "date_end", "params", "backtest",
+    "framework", "disclaimer"}`` with the companion-style ``params`` object. No Phase 2
+    statistics and no HMM fit, so it is the fast way to study costs and position rules.
+    Raises ``ValueError`` when the series is too short to label at least two days.
+    """
+    close = close.dropna()
+    labels = _labels_or_raise(close, window=window, threshold=threshold, return_type=return_type)
+    backtest = backtest_block(
+        close,
+        labels,
+        window=window,
+        threshold=threshold,
+        return_type=return_type,
+        min_train=min_train,
+        refit=refit,
+        rolling_bars=rolling_bars,
+        rule=rule,
+        dead_band=dead_band,
+        cost_model=cost_model,
+        horizons=horizons,
+        null_paths=null_paths,
+        seed=seed,
+        holdout_years=holdout_years,
+        sensitivity_windows=sensitivity_windows,
+        sensitivity_thresholds=sensitivity_thresholds,
+        cost_sensitivity_bps=cost_sensitivity_bps,
+        lag_order=lag_order,
+    )
+    return {
+        "source": source,
+        "rows": len(close),
+        "date_start": str(close.index.min().date()),
+        "date_end": str(close.index.max().date()),
+        "params": {
+            "window": window,
+            "threshold": threshold,
+            "min_train": min_train,
+            "return_type": return_type,
+        },
+        "backtest": backtest,
+        "framework": FRAMEWORK,
+        "disclaimer": DISCLAIMER,
+    }
 
 
 def to_json(result: dict) -> str:

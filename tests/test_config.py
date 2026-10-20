@@ -52,6 +52,28 @@ def test_backtest_defaults_match_section_5(defaults: dict) -> None:
     assert backtest["horizons"] == [1, 5, 10, 20]
 
 
+def test_phase3_backtest_keys_match_plan_fix_6(defaults: dict) -> None:
+    backtest = defaults["backtest"]
+    assert backtest["rolling_bars"] == 756
+    assert backtest["rule"] == "sign"
+    assert backtest["dead_band"] == 0.0
+    assert backtest["holdout_years"] == 2
+    assert backtest["lag_order"] == 20
+    assert backtest["cost_sensitivity_bps"] == [0, 5, 10, 20, 50]
+    assert backtest["sensitivity"] == {
+        "windows": [10, 20, 60],
+        "thresholds": [0.02, 0.03, 0.05, 0.07, 0.10],
+    }
+
+
+def test_backtest_rule_and_refit_are_valid_choices(defaults: dict) -> None:
+    from hedgefund.backtest.walk_forward import REFIT_MODES
+    from hedgefund.regime.signal import POSITION_RULES
+
+    assert defaults["backtest"]["rule"] in POSITION_RULES
+    assert defaults["backtest"]["refit"] in REFIT_MODES
+
+
 def test_statistics_defaults_match_section_5(defaults: dict) -> None:
     statistics = defaults["statistics"]
     assert statistics["null_paths"] == 1000
@@ -60,15 +82,31 @@ def test_statistics_defaults_match_section_5(defaults: dict) -> None:
 
 
 @pytest.mark.parametrize(
-    ("profile", "fee_bps", "slippage_bps"),
-    [("us_etfs", 1, 2), ("crypto", 10, 10)],
+    ("profile", "fee_bps", "slippage_bps", "borrow_bps", "funding_bps"),
+    [("us_etfs", 1, 2, 30, 0), ("crypto", 10, 10, 0, 0)],
 )
 def test_cost_profile_matches_section_5(
-    defaults: dict, profile: str, fee_bps: int, slippage_bps: int
+    defaults: dict,
+    profile: str,
+    fee_bps: int,
+    slippage_bps: int,
+    borrow_bps: int,
+    funding_bps: int,
 ) -> None:
     costs = defaults["costs"]["profiles"][profile]
     assert costs["fee_bps"] == fee_bps
     assert costs["slippage_bps"] == slippage_bps
+    assert costs["borrow_bps"] == borrow_bps
+    assert costs["funding_bps"] == funding_bps
+
+
+def test_cost_profiles_load_into_cost_models(defaults: dict) -> None:
+    from hedgefund.backtest.costs import cost_model_from_config
+
+    etfs = cost_model_from_config(defaults, "us_etfs")
+    assert (etfs.fee_bps, etfs.slippage_bps, etfs.borrow_bps, etfs.funding_bps) == (1, 2, 30, 0)
+    crypto = cost_model_from_config(defaults, "crypto")
+    assert crypto.per_side_bps == 20
 
 
 def test_at_least_one_universe_file_exists() -> None:

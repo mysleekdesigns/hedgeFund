@@ -6,6 +6,10 @@ the current state. Positive means long bias, negative means short bias, and the
 magnitude is conviction. ``sign_position`` is the Phase 1 position rule: take the
 sign of the signal and nothing else (+1, 0 or -1).
 
+Phase 3 adds ``position_from_matrix`` with the rules in ``POSITION_RULES``: the sign
+rule, conviction scaling (the raw signal), persistence weighting (signal times the
+probability of staying in the current regime) and the signal's own long-only version.
+
 Pure functions: numpy in, floats out, no I/O.
 """
 
@@ -60,3 +64,49 @@ def sign_position(signal: float) -> float:
     is a flat position and NaN propagates rather than being coerced.
     """
     return float(np.sign(signal))
+
+
+# Position rules the walk-forward understands (plan.md Phase 3). "sign" is Phase 1.
+POSITION_RULES: tuple[str, ...] = ("sign", "conviction", "persistence", "long_only")
+FLAT_POSITION = 0.0  # the long-only floor: never short, never leveraged
+
+
+def _validate_rule(rule: str) -> None:
+    if rule not in POSITION_RULES:
+        raise ValueError(f"rule must be one of {POSITION_RULES}, got {rule!r}")
+
+
+def position_from_signal(signal: float, stay_probability: float, rule: str = "sign") -> float:
+    """Turn a signal into a position under ``rule`` (see ``position_from_matrix``).
+
+    ``stay_probability`` is ``matrix[s, s]`` for the current state ``s``; only the
+    persistence rule reads it. Split out so the walk-forward can compute the signal
+    once and derive the position from it without re-reading the matrix.
+    """
+    _validate_rule(rule)
+    if rule == "sign":
+        return sign_position(signal)
+    if rule == "conviction":
+        return float(signal)
+    if rule == "persistence":
+        return float(signal * stay_probability)
+    return max(sign_position(signal), FLAT_POSITION)
+
+
+def position_from_matrix(matrix: np.ndarray, current_state: int, rule: str = "sign") -> float:
+    """Position in ``[-1, 1]`` for the current state under one of ``POSITION_RULES``.
+
+    With ``signal = signal_from_matrix(matrix, s)`` and ``s = current_state``:
+
+    - ``sign``: ``sign_position(signal)``, +1 / 0 / -1 (the Phase 1 rule).
+    - ``conviction``: ``signal`` itself, so a confident row sizes up.
+    - ``persistence``: ``signal * matrix[s, s]``, conviction times the probability of
+      staying in the current regime; a sticky regime sizes up, a flighty one down.
+    - ``long_only``: ``max(sign_position(signal), 0.0)``, the signal's long-only version.
+
+    Raises ``ValueError`` on an unknown rule, a non-square matrix or a bad state.
+    """
+    _validate_rule(rule)
+    signal = signal_from_matrix(matrix, current_state)
+    stay = float(np.asarray(matrix, dtype=float)[int(current_state), int(current_state)])
+    return position_from_signal(signal, stay, rule)

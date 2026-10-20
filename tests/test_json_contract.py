@@ -1,7 +1,8 @@
 """The ``analyze()`` dict is exactly the companion skill's contract (plus additive fields).
 
 The companion keys come first, in the companion's order; the Phase 2 honest-statistics
-keys follow in ``PHASE2_FIELDS`` order. Fixtures use small ``null_paths`` /
+keys follow in ``PHASE2_FIELDS`` order, then the Phase 3 ``backtest`` block
+(``PHASE3_FIELDS``). Fixtures use small ``null_paths`` /
 ``bootstrap_resamples`` so the file stays fast; the values are checked for internal
 consistency against the ``regime`` estimators, not for statistical power.
 """
@@ -17,6 +18,7 @@ import pandas as pd
 import pytest
 from typer.testing import CliRunner
 
+from hedgefund.backtest.costs import ZERO_COSTS, CostModel
 from hedgefund.cli import app
 from hedgefund.regime.labels import label_regimes
 from hedgefund.regime.markov import (
@@ -32,9 +34,12 @@ from hedgefund.report.json_contract import (
     DISCLAIMER,
     FRAMEWORK,
     PHASE2_FIELDS,
+    PHASE3_FIELDS,
     analyze,
+    backtest_only,
     to_json,
 )
+from hedgefund.report.terminal import BACKTEST_HEADER, render
 
 SEED = 7
 LONG_ROWS = 600  # enough labels for the walk-forward (252 + 30) to produce numbers
@@ -72,6 +77,17 @@ EXPECTED_PHASE2_FIELDS = [
     "mixing_epsilon",
     "tests",
     "statistics_params",
+]
+EXPECTED_PHASE3_FIELDS = ["backtest"]
+BACKTEST_ONLY_KEYS = [
+    "source",
+    "rows",
+    "date_start",
+    "date_end",
+    "params",
+    "backtest",
+    "framework",
+    "disclaimer",
 ]
 
 
@@ -125,11 +141,14 @@ def result(close: pd.Series) -> dict:
 # --------------------------------------------------------------------------- #
 # Companion prefix (frozen)
 # --------------------------------------------------------------------------- #
-def test_top_level_keys_start_with_companion_fields_then_phase2_fields(result: dict) -> None:
+def test_top_level_keys_start_with_companion_fields_then_phase2_then_phase3(result: dict) -> None:
     keys = list(result.keys())
     assert keys[: len(COMPANION_FIELDS)] == COMPANION_FIELDS
-    assert keys[len(COMPANION_FIELDS) :] == EXPECTED_PHASE2_FIELDS
+    phase2_end = len(COMPANION_FIELDS) + len(EXPECTED_PHASE2_FIELDS)
+    assert keys[len(COMPANION_FIELDS) : phase2_end] == EXPECTED_PHASE2_FIELDS
+    assert keys[phase2_end:] == EXPECTED_PHASE3_FIELDS
     assert PHASE2_FIELDS == EXPECTED_PHASE2_FIELDS
+    assert PHASE3_FIELDS == EXPECTED_PHASE3_FIELDS
 
 
 def test_nested_key_names_match_companion(result: dict) -> None:
@@ -175,6 +194,7 @@ def test_to_json_keeps_nan_only_for_walk_forward_on_short_history() -> None:
     for field in parsed:
         if field != "walk_forward":
             _assert_no_nan(parsed[field], field)
+    assert parsed["backtest"]["gross"]["sharpe"] is None  # same short history, null not NaN
 
 
 def test_analyze_raises_value_error_on_too_few_rows() -> None:
@@ -203,7 +223,11 @@ def test_cli_json_emits_exactly_one_object(tmp_path: Path) -> None:
     stdout = result.stdout
     assert stdout.count("\n") == 1 and stdout.endswith("\n")
     parsed = json.loads(stdout)
-    assert list(parsed.keys()) == [*COMPANION_FIELDS, *EXPECTED_PHASE2_FIELDS]
+    assert list(parsed.keys()) == [
+        *COMPANION_FIELDS,
+        *EXPECTED_PHASE2_FIELDS,
+        *EXPECTED_PHASE3_FIELDS,
+    ]
     assert parsed["source"] == str(path)
     assert parsed["statistics_params"]["null_paths"] == FAST_NULL_PATHS
     assert parsed["statistics_params"]["bootstrap_resamples"] == FAST_RESAMPLES
@@ -439,15 +463,25 @@ def test_changing_the_seed_changes_nothing_in_the_companion_fields(
 
 def test_fast_path_runs_on_a_400_day_series() -> None:
     out = _fast_analyze(_synthetic_close(FAST_ROWS), source="fast")
-    assert list(out.keys()) == [*COMPANION_FIELDS, *EXPECTED_PHASE2_FIELDS]
+    assert list(out.keys()) == [
+        *COMPANION_FIELDS,
+        *EXPECTED_PHASE2_FIELDS,
+        *EXPECTED_PHASE3_FIELDS,
+    ]
     _assert_no_nan({k: out[k] for k in EXPECTED_PHASE2_FIELDS}, "phase2")
+    _assert_no_nan(out["backtest"], "backtest")
 
 
 def test_short_series_emits_null_for_fields_it_cannot_compute() -> None:
     # 22 rows -> 2 labels: the stride sequence has one label, too short for the stride
     # diagonal and both tests, so those fields are null while the companion fields ship.
     tiny = _fast_analyze(_synthetic_close(WINDOW + 2), source="tiny")
-    assert list(tiny.keys()) == [*COMPANION_FIELDS, *EXPECTED_PHASE2_FIELDS]
+    assert list(tiny.keys()) == [
+        *COMPANION_FIELDS,
+        *EXPECTED_PHASE2_FIELDS,
+        *EXPECTED_PHASE3_FIELDS,
+    ]
+    _assert_no_nan(tiny["backtest"], "backtest")
     assert tiny["stride_n_transitions"] == 0
     assert tiny["stride_diagonal"] == {"bear": None, "sideways": None, "bull": None}
     assert tiny["tests"]["anderson_goodman"] is None
@@ -462,3 +496,83 @@ def test_result_is_plain_json_types(result: dict) -> None:
         assert value is None or isinstance(value, bool | int | float | str), (where, type(value))
 
     _walk(copy.deepcopy(result), "result", visit)
+
+
+# --------------------------------------------------------------------------- #
+# Phase 3: the ``backtest`` block and ``backtest_only``
+# --------------------------------------------------------------------------- #
+def test_backtest_gross_sharpe_equals_the_companion_walk_forward(result: dict) -> None:
+    bt = result["backtest"]
+    assert bt["gross"]["sharpe"] == result["walk_forward"]["sharpe"]
+    assert bt["gross"]["max_drawdown"] == result["walk_forward"]["max_drawdown"]
+    assert bt["gross"]["n_days"] == result["walk_forward"]["n_trades"]
+    assert bt["net"]["sharpe"] < bt["gross"]["sharpe"]  # default us_etfs costs apply
+
+
+def test_backtest_block_shares_null_paths_and_seed_with_the_statistics(result: dict) -> None:
+    params = result["backtest"]["params"]
+    assert params["null_paths"] == result["statistics_params"]["null_paths"] == FAST_NULL_PATHS
+    assert params["seed"] == result["statistics_params"]["seed"]
+    assert result["backtest"]["null"]["permutation"]["n_paths"] == FAST_NULL_PATHS
+    assert params["refit"] == "expanding" and params["rule"] == "sign"
+    assert params["dead_band"] == 0.0 and params["rolling_bars"] == 756
+    assert params["costs"]["per_side_bps"] == CostModel().per_side_bps
+
+
+def test_backtest_block_is_finite_and_round_trips(result: dict) -> None:
+    _assert_no_nan(result["backtest"], "backtest")
+    assert "NaN" not in to_json(result["backtest"])
+
+
+def test_changing_cost_model_or_seed_changes_nothing_in_companion_or_phase2_fields(
+    close: pd.Series, result: dict
+) -> None:
+    other = _fast_analyze(
+        close,
+        cost_model=ZERO_COSTS,
+        rule="long_only",
+        refit="rolling",
+        backtest_rolling_bars=100,
+        dead_band=0.5,
+    )
+    for field in [*COMPANION_FIELDS, *PHASE2_FIELDS]:
+        assert other[field] == result[field], field
+    assert other["backtest"]["params"]["rule"] == "long_only"
+    assert other["backtest"]["params"]["refit"] == "rolling"
+    assert other["backtest"]["params"]["rolling_bars"] == 100
+    assert other["backtest"]["net"] == other["backtest"]["gross"]  # zero costs
+    assert other["backtest"] != result["backtest"]
+
+
+def test_statistics_rolling_bars_and_backtest_rolling_bars_are_separate_knobs(
+    close: pd.Series,
+) -> None:
+    out = _fast_analyze(close, rolling_bars=100, backtest_rolling_bars=300)
+    assert out["rolling_bars"] == 100  # Phase 2 rolling matrix window
+    assert out["statistics_params"]["rolling_bars"] == 100
+    assert out["backtest"]["params"]["rolling_bars"] == 300  # walk-forward rolling refit
+
+
+def test_backtest_only_returns_the_slim_dict(close: pd.Series, result: dict) -> None:
+    slim = backtest_only(close, source="synthetic", null_paths=FAST_NULL_PATHS)
+    assert list(slim.keys()) == BACKTEST_ONLY_KEYS
+    assert slim["params"] == result["params"]
+    assert slim["framework"] == FRAMEWORK and slim["disclaimer"] == DISCLAIMER
+    assert slim["rows"] == result["rows"]
+    assert slim["date_start"] == result["date_start"] and slim["date_end"] == result["date_end"]
+    assert slim["backtest"] == result["backtest"]  # same inputs, same block
+    assert json.loads(to_json(slim)) == slim
+
+
+def test_backtest_only_raises_the_companion_error_on_too_few_rows() -> None:
+    with pytest.raises(ValueError, match="Not enough data to label regimes"):
+        backtest_only(_synthetic_close(10), source="tiny", window=WINDOW)
+
+
+def test_render_consumes_the_backtest_block(result: dict) -> None:
+    text = render(result)
+    assert BACKTEST_HEADER in text
+    assert "buy-and-hold" in text and "percentile" in text
+    without = copy.deepcopy(result)
+    del without["backtest"]
+    assert BACKTEST_HEADER not in render(without)

@@ -16,8 +16,17 @@ data:
 
 backtest:
   min_train: 252        # one trading year of history before the walk-forward starts (section 5)
-  refit: expanding      # expanding | rolling:756 (3y) (section 5)
-  horizons: [1, 5, 10, 20]  # per-horizon P&L reporting (section 3, backtest/metrics.py)
+  refit: expanding      # expanding | rolling; expanding is the companion's behaviour (section 5)
+  rolling_bars: 756     # rolling refit window, 3 trading years (3 * 252) when refit is rolling (section 5)
+  rule: sign            # sign | conviction | persistence | long_only; sign is the Phase 1 rule (Phase 3)
+  dead_band: 0.0        # rebalance only when |target - held| exceeds this; 0 = every change, Phase 1 behaviour (Fix 6)
+  horizons: [1, 5, 10, 20]  # per-horizon P&L reporting: 1 day, 1 week, 2 weeks, 1 month (Fix 6)
+  holdout_years: 2      # the last two years are never used for parameter selection and are reported separately (Fix 6)
+  lag_order: 20         # a turning point is the extreme within +/-20 bars, the labeller window (Fix 3)
+  cost_sensitivity_bps: [0, 5, 10, 20, 50]  # per-side cost levels of the sensitivity table (Fix 6)
+  sensitivity:
+    windows: [10, 20, 60]                    # window axis of the net-Sharpe heatmap: the three windows section 5 exposes
+    thresholds: [0.02, 0.03, 0.05, 0.07, 0.10]  # threshold axis: 0.02 on-camera, 0.05 default, wider for the overfit check (Fix 6)
 
 statistics:
   null_paths: 1000      # shuffled-label / random-sign null paths for percentile ranking (section 5)
@@ -31,13 +40,17 @@ statistics:
   homogeneity_periods: 2  # two halves of the ~125-label stride sequence keep enough transitions per row for the chi-square approximation (Fix 4)
   seed: 0               # explicit RNG seed for every null model and bootstrap; change to check sensitivity
 
-costs:                  # per-side bps; overridden per universe via cost_profile (section 5)
+costs:                  # fee/slippage are per-side bps on |delta position|; borrow/funding are annual bps (Fix 6)
   profiles:
     us_etfs:
       fee_bps: 1        # section 5: 1 bps fee for liquid US ETFs
       slippage_bps: 2   # section 5: 2 bps slippage for liquid US ETFs
+      borrow_bps: 30    # annual general-collateral borrow on short ETF notional, typical for liquid names (Fix 6)
+      funding_bps: 0    # spot ETFs carry no perpetual funding
     crypto:
       fee_bps: 10       # section 5: 10 bps fee for crypto
       slippage_bps: 10  # section 5: 10 bps slippage for crypto
+      borrow_bps: 0     # spot crypto has no borrow desk; shorts are expressed through perps (see funding_bps)
+      funding_bps: 0    # spot has none; perpetual futures funding runs roughly 1000 bps a year, set that if trading perps
 
 universe: us_etfs       # default universe file under config/universes/

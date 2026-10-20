@@ -1,4 +1,5 @@
-"""``hedgefund analyze`` CLI behaviour: argument validation, output modes, error paths."""
+"""``hedgefund analyze`` and ``hedgefund backtest`` CLI behaviour: argument validation,
+output modes, error paths, and the Phase 3 cost / rule flags."""
 
 import json
 from pathlib import Path
@@ -31,6 +32,39 @@ STATISTICS_YAML = (
     "  rolling_bars: 100\n  ew_half_life: 50\n  shrinkage_alpha: 5\n"
     "  mixing_epsilon: 0.05\n  homogeneity_periods: 2\n  seed: 9\n"
 )
+# ... and, since Phase 3, the backtest keys below min_train plus a costs block and universe.
+BACKTEST_YAML = (
+    "  refit: expanding\n  rolling_bars: 756\n  rule: sign\n  dead_band: 0.0\n"
+    "  horizons: [1, 5, 10, 20]\n  holdout_years: 2\n  lag_order: 20\n"
+    "  cost_sensitivity_bps: [0, 5, 10, 20, 50]\n"
+    "  sensitivity:\n    windows: [10, 20, 60]\n    thresholds: [0.02, 0.03, 0.05, 0.07, 0.10]\n"
+)
+COSTS_YAML = (
+    "costs:\n  profiles:\n    us_etfs:\n      fee_bps: 1\n      slippage_bps: 2\n"
+    "      borrow_bps: 30\n      funding_bps: 0\n"
+    "universe: us_etfs\n"
+)
+ZERO_COST_FLAGS = [
+    "--fee-bps",
+    "0",
+    "--slippage-bps",
+    "0",
+    "--borrow-bps",
+    "0",
+    "--funding-bps",
+    "0",
+]
+LONG_ROWS = 700  # enough for the walk-forward with SMALL_MIN_TRAIN and a two-year holdout
+BACKTEST_ONLY_KEYS = [
+    "source",
+    "rows",
+    "date_start",
+    "date_end",
+    "params",
+    "backtest",
+    "framework",
+    "disclaimer",
+]
 
 
 def _synthetic_close(rows: int = ROWS, seed: int = SEED) -> pd.Series:
@@ -167,8 +201,8 @@ def test_config_file_supplies_defaults(csv_path: Path, tmp_path: Path) -> None:
     custom = tmp_path / "custom.yaml"
     custom.write_text(
         "labelling:\n  window: 15\n  threshold: 0.03\n  return_type: log\n"
-        f"data:\n  years: 4\nbacktest:\n  min_train: {SMALL_MIN_TRAIN}\n"
-        f"{STATISTICS_YAML}"
+        f"data:\n  years: 4\nbacktest:\n  min_train: {SMALL_MIN_TRAIN}\n{BACKTEST_YAML}"
+        f"{STATISTICS_YAML}{COSTS_YAML}"
     )
     result = CliRunner().invoke(
         app, ["analyze", "--csv", str(csv_path), "--no-hmm", "--json", "--config", str(custom)]
@@ -181,6 +215,7 @@ def test_config_file_supplies_defaults(csv_path: Path, tmp_path: Path) -> None:
         "min_train": SMALL_MIN_TRAIN,
         "return_type": "log",
     }
+    assert parsed["backtest"]["params"]["return_type"] == "log"
     assert parsed["statistics_params"] == {
         "null_paths": FAST_NULL_PATHS,
         "bootstrap_resamples": FAST_RESAMPLES,
@@ -235,10 +270,244 @@ def test_config_without_statistics_block_is_an_error(csv_path: Path, tmp_path: P
     custom = tmp_path / "partial.yaml"
     custom.write_text(
         "labelling:\n  window: 15\n  threshold: 0.03\n  return_type: log\n"
-        f"data:\n  years: 4\nbacktest:\n  min_train: {SMALL_MIN_TRAIN}\n"
+        f"data:\n  years: 4\nbacktest:\n  min_train: {SMALL_MIN_TRAIN}\n{BACKTEST_YAML}"
+        f"{COSTS_YAML}"
     )
     result = CliRunner().invoke(
         app, ["analyze", "--csv", str(csv_path), "--no-hmm", "--json", "--config", str(custom)]
     )
     assert result.exit_code == 1
     assert "config is missing statistics" in json.loads(result.stdout)["error"]
+
+
+def test_config_without_backtest_rule_is_an_error(csv_path: Path, tmp_path: Path) -> None:
+    custom = tmp_path / "partial.yaml"
+    custom.write_text(
+        "labelling:\n  window: 15\n  threshold: 0.03\n  return_type: log\n"
+        f"data:\n  years: 4\nbacktest:\n  min_train: {SMALL_MIN_TRAIN}\n"
+        f"{STATISTICS_YAML}{COSTS_YAML}"
+    )
+    result = CliRunner().invoke(
+        app, ["analyze", "--csv", str(csv_path), "--no-hmm", "--json", "--config", str(custom)]
+    )
+    assert result.exit_code == 1
+    assert "config is missing backtest." in json.loads(result.stdout)["error"]
+
+
+# --------------------------------------------------------------------------- #
+# Phase 3: analyze carries the backtest block; the new ``backtest`` command
+# --------------------------------------------------------------------------- #
+@pytest.fixture
+def long_csv_path(tmp_path: Path) -> Path:
+    path = tmp_path / "long_prices.csv"
+    _synthetic_close(LONG_ROWS).to_csv(path)
+    return path
+
+
+def _backtest_json(path: Path, *flags: str) -> dict:
+    result = CliRunner().invoke(
+        app,
+        ["backtest", "--csv", str(path), "--json", "--null-paths", str(FAST_NULL_PATHS), *flags],
+    )
+    assert result.exit_code == 0, result.output
+    assert result.stdout.count("\n") == 1
+    return json.loads(result.stdout)
+
+
+def test_analyze_json_still_has_all_old_keys_plus_backtest(csv_path: Path) -> None:
+    result = CliRunner().invoke(
+        app, ["analyze", "--csv", str(csv_path), "--no-hmm", "--json", *FAST_FLAGS]
+    )
+    assert result.exit_code == 0, result.output
+    parsed = json.loads(result.stdout)
+    for key in (
+        "source",
+        "transition_matrix",
+        "walk_forward",
+        "stride_matrix",
+        "statistics_params",
+    ):
+        assert key in parsed, key
+    assert list(parsed)[-1] == "backtest"
+    bt = parsed["backtest"]
+    assert bt["params"]["rule"] == "sign" and bt["params"]["refit"] == "expanding"
+    assert bt["params"]["costs"] == {
+        "fee_bps": 1.0,
+        "slippage_bps": 2.0,
+        "borrow_bps": 30.0,
+        "funding_bps": 0.0,
+        "per_side_bps": 3.0,
+    }  # config/default.yaml costs.profiles.us_etfs via universe us_etfs
+
+
+def test_analyze_accepts_refit_rule_dead_band_and_cost_profile(csv_path: Path) -> None:
+    result = CliRunner().invoke(
+        app,
+        [
+            "analyze",
+            "--csv",
+            str(csv_path),
+            "--no-hmm",
+            "--json",
+            *FAST_FLAGS,
+            "--refit",
+            "rolling:100",
+            "--rule",
+            "long_only",
+            "--dead-band",
+            "0.5",
+            "--cost-profile",
+            "crypto",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    params = json.loads(result.stdout)["backtest"]["params"]
+    assert params["refit"] == "rolling" and params["rolling_bars"] == 100
+    assert params["rule"] == "long_only" and params["dead_band"] == 0.5
+    assert params["costs"]["fee_bps"] == 10.0 and params["costs"]["slippage_bps"] == 10.0
+
+
+def test_backtest_json_prints_one_object_with_the_slim_shape(long_csv_path: Path) -> None:
+    parsed = _backtest_json(long_csv_path, "--min-train", str(SMALL_MIN_TRAIN))
+    assert list(parsed.keys()) == BACKTEST_ONLY_KEYS
+    assert parsed["framework"] == "Roan (@RohOnChain)"
+    assert parsed["disclaimer"] == "Backtests are historical, not forward-looking."
+    assert parsed["source"] == str(long_csv_path) and parsed["rows"] == LONG_ROWS
+    bt = parsed["backtest"]
+    assert bt["net"]["n_days"] > 0
+    assert bt["null"]["random_sign"]["n_paths"] == FAST_NULL_PATHS
+    assert "NaN" not in json.dumps(parsed)
+
+
+def test_backtest_refit_rolling_colon_sets_rolling_bars(long_csv_path: Path) -> None:
+    params = _backtest_json(long_csv_path, "--refit", "rolling:100")["backtest"]["params"]
+    assert params["refit"] == "rolling"
+    assert params["rolling_bars"] == 100
+
+
+def test_backtest_explicit_rolling_bars_flag_wins_over_the_suffix(long_csv_path: Path) -> None:
+    params = _backtest_json(long_csv_path, "--refit", "rolling:100", "--rolling-bars", "200")
+    assert params["backtest"]["params"]["rolling_bars"] == 200
+    plain = _backtest_json(long_csv_path, "--refit", "rolling")["backtest"]["params"]
+    assert plain["rolling_bars"] == 756  # config/default.yaml backtest.rolling_bars
+
+
+def test_backtest_rule_flag_is_echoed(long_csv_path: Path) -> None:
+    params = _backtest_json(long_csv_path, "--rule", "long_only")["backtest"]["params"]
+    assert params["rule"] == "long_only"
+
+
+def test_backtest_zero_cost_flags_make_net_equal_gross(long_csv_path: Path) -> None:
+    bt = _backtest_json(long_csv_path, "--min-train", str(SMALL_MIN_TRAIN), *ZERO_COST_FLAGS)[
+        "backtest"
+    ]
+    assert bt["params"]["costs"] == {
+        "fee_bps": 0.0,
+        "slippage_bps": 0.0,
+        "borrow_bps": 0.0,
+        "funding_bps": 0.0,
+        "per_side_bps": 0.0,
+    }
+    assert bt["net"] == bt["gross"]
+    assert bt["annual_cost"] == 0.0
+
+
+def test_backtest_cost_flag_overrides_one_profile_value(long_csv_path: Path) -> None:
+    costs = _backtest_json(long_csv_path, "--cost-profile", "crypto", "--fee-bps", "3")["backtest"][
+        "params"
+    ]["costs"]
+    assert costs == {
+        "fee_bps": 3.0,
+        "slippage_bps": 10.0,
+        "borrow_bps": 0.0,
+        "funding_bps": 0.0,
+        "per_side_bps": 13.0,
+    }
+
+
+def test_backtest_unknown_rule_exits_1_with_error_object(long_csv_path: Path) -> None:
+    result = CliRunner().invoke(
+        app, ["backtest", "--csv", str(long_csv_path), "--json", "--rule", "yolo"]
+    )
+    assert result.exit_code == 1
+    parsed = json.loads(result.stdout)
+    assert list(parsed.keys()) == ["error"]
+    assert "--rule must be one of" in parsed["error"] and "yolo" in parsed["error"]
+
+
+@pytest.mark.parametrize("bad", ["monthly", "rolling:abc"])
+def test_backtest_unknown_refit_exits_1(long_csv_path: Path, bad: str) -> None:
+    result = CliRunner().invoke(
+        app, ["backtest", "--csv", str(long_csv_path), "--json", "--refit", bad]
+    )
+    assert result.exit_code == 1
+    assert "--refit" in json.loads(result.stdout)["error"]
+
+
+def test_backtest_unknown_cost_profile_exits_1(long_csv_path: Path) -> None:
+    result = CliRunner().invoke(
+        app, ["backtest", "--csv", str(long_csv_path), "--json", "--cost-profile", "moon"]
+    )
+    assert result.exit_code == 1
+    assert "unknown cost profile" in json.loads(result.stdout)["error"]
+
+
+def test_backtest_without_source_prints_error_object() -> None:
+    result = CliRunner().invoke(app, ["backtest", "--json"])
+    assert result.exit_code == 1
+    assert json.loads(result.stdout) == {"error": "Provide exactly one of --ticker or --csv."}
+
+
+def test_backtest_pretty_mode_prints_the_report(long_csv_path: Path) -> None:
+    result = CliRunner().invoke(
+        app,
+        [
+            "backtest",
+            "--csv",
+            str(long_csv_path),
+            "--min-train",
+            str(SMALL_MIN_TRAIN),
+            "--null-paths",
+            str(FAST_NULL_PATHS),
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    out = result.stdout
+    assert out.startswith(f"\nmarkov-regime backtest — source={long_csv_path} window=20 ")
+    assert "Backtest (Phase 3):" in out
+    assert "buy-and-hold" in out
+    assert "percentile" in out
+    assert "Costs: 3.0 bps per side" in out
+    assert "Turnover" in out
+    assert " Framework: Roan (@RohOnChain)." in out
+
+
+def test_backtest_pretty_mode_on_bad_path_reports_error_on_stderr(tmp_path: Path) -> None:
+    result = CliRunner().invoke(app, ["backtest", "--csv", str(tmp_path / "nope.csv")])
+    assert result.exit_code == 1
+    assert result.stdout == ""
+    assert result.stderr.startswith("\nERROR: ")
+
+
+def test_backtest_ticker_uses_fetch_ticker(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[tuple[str, int]] = []
+
+    def fake_fetch(ticker: str, years: int = 0) -> pd.Series:
+        calls.append((ticker, years))
+        return _synthetic_close(LONG_ROWS)
+
+    monkeypatch.setattr(cli, "fetch_ticker", fake_fetch)
+    result = CliRunner().invoke(
+        app, ["backtest", "--ticker", "FAKE", "--years", "3", "--json", "--null-paths", "5"]
+    )
+    assert result.exit_code == 0, result.output
+    assert calls == [("FAKE", 3)]
+    assert json.loads(result.stdout)["source"] == "FAKE"
+
+
+def test_backtest_short_history_still_serialises_with_null_metrics(csv_path: Path) -> None:
+    parsed = _backtest_json(csv_path)  # 300 rows < min_train 252 + 30
+    bt = parsed["backtest"]
+    assert bt["gross"]["sharpe"] is None and bt["net"]["n_days"] == 0
+    assert bt["null"] is None and bt["holdout"] is None
+    assert "NaN" not in json.dumps(parsed)
