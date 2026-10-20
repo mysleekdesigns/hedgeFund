@@ -1,0 +1,14 @@
+# Streamlit settings for the optional dashboard (plan.md Phase 8).
+#
+# `hedgefund dashboard` passes the same values as command-line flags; this file covers a
+# direct `uv run streamlit run dashboard/app.py` so the gate "no network calls" holds there
+# too. An explicit server address makes Streamlit print one URL and skip its startup lookups
+# (UDP probe to 8.8.8.8 for the internal IP; HTTP GET to checkip.amazonaws.com in headless
+# mode). `headless` is deliberately unset: the CLI's --headless flag or the user decides.
+
+[server]
+address = "localhost"       # loopback only; also disables the IP lookups above
+showEmailPrompt = false     # a first run would otherwise block on an interactive prompt
+
+[browser]
+gatherUsageStats = false    # no telemetry from a research tool

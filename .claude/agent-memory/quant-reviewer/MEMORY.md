@@ -6,3 +6,4 @@
 - [Phase 5 review context](phase5-review-context.md) — four warnings found and verified fixed same day; CSV cache keys carry a content fingerprint (file must be present); HEAD-vs-worktree recipe needs config/
 - [Phase 6 review context](phase6-review-context.md) — Pine int/int division is float (docs), array ternary + int!=na unverifiable, strategy cost = ETF profile only, static test gaps, plugin install string
 - [Phase 7 review context](phase7-review-context.md) — token_env exfil, urllib redirect forwards token, propose --rule ignored, crypto partial-bar window, IEX vs consolidated closes
+- [Phase 8 review context](phase8-review-context.md) — streamlit --headless hits checkip.amazonaws.com, email prompt, cost model from live config, app seed 0 vs run seed, importorskip hides gate test

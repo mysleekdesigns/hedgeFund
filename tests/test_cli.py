@@ -2,9 +2,12 @@
 validation, output modes, error paths, the Phase 3 cost / rule flags and the Phase 5 cache,
 jobs and HTML layout."""
 
+import importlib.util
 import inspect
 import json
 import shutil
+import subprocess
+import tomllib
 from pathlib import Path
 
 import numpy as np
@@ -1299,3 +1302,158 @@ def test_daily_rejects_a_registration_that_names_the_alpaca_secret(
     assert result.exit_code == 1
     error = json.loads(result.stdout)["error"]
     assert "exfil.json" in error and "token_env" in error
+
+
+# --- Phase 8: hedgefund dashboard -------------------------------------------------------------
+
+
+def _never_run(*args: object, **kwargs: object) -> None:
+    raise AssertionError("subprocess.run must not be called in a --json dry run")
+
+
+def _streamlit_present(name: str, *args: object) -> object:
+    if name == "streamlit":
+        return object()  # any non-None spec means "installed"
+    return importlib.util.find_spec(name, *args)
+
+
+@pytest.fixture
+def dashboard_ready(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
+    """Stub the launch preconditions so the tests need neither streamlit nor dashboard/app.py.
+
+    ``dashboard/app.py`` is written by the dashboard package and the streamlit extra is
+    optional; the CLI tests must pass without either and never bind a port.
+    """
+    app_path = tmp_path / "dashboard" / "app.py"
+    app_path.parent.mkdir()
+    app_path.write_text("# stub Streamlit app\n")
+    monkeypatch.setattr(cli, "APP_PATH", app_path)
+    monkeypatch.setattr(cli.importlib.util, "find_spec", _streamlit_present)
+    return app_path
+
+
+def test_dashboard_json_is_a_dry_run_with_one_object(
+    monkeypatch: pytest.MonkeyPatch, dashboard_ready: Path
+) -> None:
+    monkeypatch.setattr(cli.subprocess, "run", _never_run)
+    result = CliRunner().invoke(app, ["dashboard", "--json"])
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.stdout)  # exactly one object on stdout
+    command = payload["command"]
+    assert "streamlit" in command and "run" in command
+    assert str(dashboard_ready) in command
+    assert str(cli.DEFAULT_DASHBOARD_PORT) in command
+    assert payload["port"] == cli.DEFAULT_DASHBOARD_PORT
+
+
+def test_dashboard_jobs_dir_travels_through_the_environment(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, dashboard_ready: Path
+) -> None:
+    monkeypatch.setattr(cli.subprocess, "run", _never_run)
+    monkeypatch.delenv(cli.JOBS_DIR_ENV, raising=False)
+    jobs = tmp_path / "jobs"
+    result = CliRunner().invoke(app, ["dashboard", "--jobs-dir", str(jobs), "--json"])
+    assert result.exit_code == 0, result.output
+    assert json.loads(result.stdout)["jobs_dir"] == str(jobs.resolve())
+
+    _, env = cli.dashboard_command_line(jobs, cli.DEFAULT_DASHBOARD_PORT, headless=False)
+    assert env[cli.JOBS_DIR_ENV] == str(jobs.resolve())
+    _, env_without = cli.dashboard_command_line(None, cli.DEFAULT_DASHBOARD_PORT, headless=False)
+    assert cli.JOBS_DIR_ENV not in env_without
+
+
+def _flag_value(cmd: list[str], flag: str) -> str:
+    return cmd[cmd.index(flag) + 1]
+
+
+def test_dashboard_headless_flag_sets_server_headless() -> None:
+    cmd, _ = cli.dashboard_command_line(None, cli.DEFAULT_DASHBOARD_PORT, headless=True)
+    assert _flag_value(cmd, "--server.headless") == "true"
+    # Headless would otherwise trigger Streamlit's external-IP HTTP lookup and the email prompt.
+    assert _flag_value(cmd, "--server.address") == "localhost"
+    assert _flag_value(cmd, "--server.showEmailPrompt") == "false"
+    cmd_default, _ = cli.dashboard_command_line(None, cli.DEFAULT_DASHBOARD_PORT, headless=False)
+    assert "--server.headless" not in cmd_default
+
+
+def test_dashboard_every_launch_binds_localhost_without_prompts_or_telemetry() -> None:
+    cmd, _ = cli.dashboard_command_line(None, cli.DEFAULT_DASHBOARD_PORT, headless=False)
+    assert _flag_value(cmd, "--server.address") == "localhost"
+    assert _flag_value(cmd, "--server.showEmailPrompt") == "false"
+    assert _flag_value(cmd, "--browser.gatherUsageStats") == "false"
+
+
+def test_streamlit_config_file_covers_a_direct_streamlit_run() -> None:
+    config_path = Path(cli.__file__).resolve().parents[2] / ".streamlit" / "config.toml"
+    assert config_path.is_file(), config_path
+    config = tomllib.loads(config_path.read_text())
+    assert config["server"]["address"] == "localhost"
+    assert config["server"]["showEmailPrompt"] is False
+    assert "headless" not in config["server"]  # left to the CLI flag / the user
+    assert config["browser"]["gatherUsageStats"] is False
+
+
+def test_dashboard_runs_streamlit_once_with_the_expected_argv(
+    monkeypatch: pytest.MonkeyPatch, dashboard_ready: Path
+) -> None:
+    calls: list[tuple[list[str], dict]] = []
+
+    def fake_run(cmd: list[str], **kwargs: object) -> subprocess.CompletedProcess:
+        calls.append((cmd, kwargs))
+        return subprocess.CompletedProcess(cmd, 0)
+
+    monkeypatch.setattr(cli.subprocess, "run", fake_run)
+    result = CliRunner().invoke(app, ["dashboard", "--port", "8600", "--headless"])
+    assert result.exit_code == 0, result.output
+    assert len(calls) == 1
+    expected, _ = cli.dashboard_command_line(None, 8600, headless=True)
+    assert calls[0][0] == expected
+    assert calls[0][1]["check"] is False
+    assert "8600" in result.output
+
+
+def test_dashboard_propagates_the_streamlit_return_code(
+    monkeypatch: pytest.MonkeyPatch, dashboard_ready: Path
+) -> None:
+    monkeypatch.setattr(
+        cli.subprocess, "run", lambda cmd, **kw: subprocess.CompletedProcess(cmd, 3)
+    )
+    result = CliRunner().invoke(app, ["dashboard"])
+    assert result.exit_code == 3
+
+
+def _no_streamlit(name: str, *args: object) -> object:
+    if name == "streamlit":
+        return None
+    return importlib.util.find_spec(name, *args)
+
+
+def test_dashboard_without_streamlit_names_the_extra(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(cli.importlib.util, "find_spec", _no_streamlit)
+    monkeypatch.setattr(cli.subprocess, "run", _never_run)
+    result = CliRunner().invoke(app, ["dashboard"])
+    assert result.exit_code == 1
+    assert "uv sync --extra dashboard" in result.output
+    assert "Traceback" not in result.output
+
+
+def test_dashboard_without_streamlit_json_prints_an_error_object(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(cli.importlib.util, "find_spec", _no_streamlit)
+    monkeypatch.setattr(cli.subprocess, "run", _never_run)
+    result = CliRunner().invoke(app, ["dashboard", "--json"])
+    assert result.exit_code == 1
+    assert "uv sync --extra dashboard" in json.loads(result.stdout)["error"]
+
+
+def test_dashboard_missing_app_path_is_an_error_naming_the_path(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    missing = tmp_path / "nowhere" / "app.py"
+    monkeypatch.setattr(cli.importlib.util, "find_spec", _streamlit_present)
+    monkeypatch.setattr(cli, "APP_PATH", missing)
+    monkeypatch.setattr(cli.subprocess, "run", _never_run)
+    result = CliRunner().invoke(app, ["dashboard", "--json"])
+    assert result.exit_code == 1
+    assert str(missing) in json.loads(result.stdout)["error"]

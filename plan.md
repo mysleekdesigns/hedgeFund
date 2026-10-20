@@ -422,11 +422,11 @@ Progress key: `[x]` done, `[ ]` not started. Each phase ends with an acceptance 
 
 ### Phase 8 — Dashboard, optional (1 day)
 
-- [ ] Streamlit app under `dashboard/` reading cached runs.
-- [ ] Controls: symbol, window, threshold, refit mode, cost profile.
-- [ ] Views: regime ribbon, matrix heatmap with CIs, stationary mix, `P**n` convergence animation.
-- [ ] Views: walk-forward equity vs buy-and-hold and null band.
-- [ ] Launch command `hedgefund dashboard`.
+- [x] Streamlit app under `dashboard/` reading cached runs.
+- [x] Controls: symbol, window, threshold, refit mode, cost profile.
+- [x] Views: regime ribbon, matrix heatmap with CIs, stationary mix, `P**n` convergence animation.
+- [x] Views: walk-forward equity vs buy-and-hold and null band.
+- [x] Launch command `hedgefund dashboard`.
 
 **Gate:** dashboard opens from a cached scan with no network calls.
 

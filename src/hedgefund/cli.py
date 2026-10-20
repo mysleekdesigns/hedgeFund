@@ -11,11 +11,16 @@ symbol through the parquet cache, writes a run manifest, results and a ranked ta
 regenerates that HTML from the cached run without touching the network. ``hedgefund
 daily`` is the Phase 7 scheduled job: a scan plus a signal file and a summary POST to the
 consumers under ``webhooks/``; ``hedgefund propose`` turns that signal file into a paper
-allocation and prints the proposed orders without submitting anything. Config over
-flags: every default comes from ``config/default.yaml``; a flag overrides it.
+allocation and prints the proposed orders without submitting anything. ``hedgefund
+dashboard`` launches the optional Streamlit app over the cached runs (Phase 8). Config
+over flags: every default comes from ``config/default.yaml``; a flag overrides it.
 """
 
+import importlib.util
 import json
+import os
+import subprocess
+import sys
 from pathlib import Path
 from typing import Annotated
 
@@ -25,6 +30,7 @@ from hedgefund import __version__
 from hedgefund.backtest.costs import CostModel, cost_model_from_config
 from hedgefund.backtest.walk_forward import REFIT_MODES
 from hedgefund.config import DEFAULT_CONFIG_PATH, load_config
+from hedgefund.dashboard import APP_PATH, JOBS_DIR_ENV
 from hedgefund.data.base import PriceSource, close_series
 from hedgefund.data.cache import CachedSource, read_cached
 from hedgefund.data.csv_source import CsvDirSource, load_csv
@@ -68,6 +74,8 @@ DEFAULT_ALPACA_ADJUSTMENT = "all"  # splits and dividends adjusted, matching yfi
 DEFAULT_PAPER_MAX_GROSS = 1.0  # gross exposure capped at 100% of equity: no leverage by default
 DEFAULT_PAPER_ALLOW_SHORT = True  # the sign rule emits -1 in Bear; a long-only book sets False
 DEFAULT_PAPER_MIN_TRADE_NOTIONAL = 1.0  # skip proposed trades below one dollar of notional
+DEFAULT_DASHBOARD_PORT = 8501  # Streamlit's own default port
+STREAMLIT_MISSING = "streamlit is not installed; run `uv sync --extra dashboard`"
 
 
 @app.callback()
@@ -1017,6 +1025,85 @@ def report_command(
         typer.echo(json.dumps({"run_id": run_id, "html": str(index_path)}))
     else:
         typer.echo(str(index_path))
+
+
+def dashboard_command_line(
+    jobs_dir: Path | None, port: int, headless: bool
+) -> tuple[list[str], dict[str, str]]:
+    """Build the ``streamlit run`` argv and child environment for ``hedgefund dashboard``.
+
+    Pure so the launch is testable without starting a server. ``--jobs-dir`` travels through
+    the ``HEDGEFUND_JOBS_DIR`` environment variable because Streamlit swallows script argv;
+    when it is not given the child inherits the parent's environment unchanged and the app
+    falls back to its own default (``jobs/`` at the repo root).
+    """
+    cmd = [
+        sys.executable,
+        "-m",
+        "streamlit",
+        "run",
+        str(APP_PATH),
+        "--server.port",
+        str(port),
+        "--browser.gatherUsageStats",  # no telemetry from a research tool
+        "false",
+        # Bind loopback only. With an explicit address Streamlit prints a single URL and
+        # skips both of its startup lookups: the UDP probe to 8.8.8.8 for the internal IP
+        # and (in headless mode) the HTTP GET to checkip.amazonaws.com for the external IP.
+        "--server.address",
+        "localhost",
+        # A first run without ~/.streamlit/credentials.toml would otherwise block on an
+        # interactive email prompt.
+        "--server.showEmailPrompt",
+        "false",
+    ]
+    if headless:
+        cmd += ["--server.headless", "true"]  # do not open a browser (servers, CI)
+    env = dict(os.environ)
+    if jobs_dir is not None:
+        env[JOBS_DIR_ENV] = str(jobs_dir.resolve())
+    return cmd, env
+
+
+@app.command(name="dashboard")
+def dashboard_command(
+    jobs_dir: JobsDirOpt = None,
+    port: Annotated[
+        int, typer.Option("--port", help="Local port for the Streamlit server")
+    ] = DEFAULT_DASHBOARD_PORT,
+    headless: Annotated[
+        bool, typer.Option("--headless", help="Do not open a browser (servers, CI)")
+    ] = False,
+    json_output: Annotated[
+        bool,
+        typer.Option(
+            "--json",
+            help="Dry run: print the command and environment as one JSON object, do not launch",
+        ),
+    ] = False,
+) -> None:
+    """Launch the local Streamlit dashboard over cached scan runs (no network calls).
+
+    Needs the optional extra: ``uv sync --extra dashboard``.
+
+    ``--json`` is a dry run: it prints the command and exits without starting a server.
+    """
+    try:
+        if importlib.util.find_spec("streamlit") is None:
+            raise RuntimeError(STREAMLIT_MISSING)
+        if not APP_PATH.is_file():
+            raise FileNotFoundError(f"dashboard app not found at {APP_PATH}")
+        cmd, env = dashboard_command_line(jobs_dir, port, headless)
+    except Exception as exc:
+        _fail(exc, json_output)
+
+    jobs_dir_used = env.get(JOBS_DIR_ENV, str(DEFAULT_JOBS_DIR))
+    if json_output:
+        typer.echo(json.dumps({"command": cmd, "jobs_dir": jobs_dir_used, "port": port}))
+        return
+    typer.echo(f"Launching dashboard at http://localhost:{port} (jobs dir: {jobs_dir_used})")
+    completed = subprocess.run(cmd, env=env, check=False)
+    raise typer.Exit(code=completed.returncode)
 
 
 def main() -> None:

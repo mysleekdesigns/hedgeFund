@@ -285,6 +285,7 @@ dev = [
     { name = "pre-commit" },
     { name = "pytest" },
     { name = "ruff" },
+    { name = "streamlit" },
 ]
 
 [package.metadata]
@@ -309,6 +310,7 @@ dev = [
     { name = "pre-commit", specifier = ">=4.7.0" },
     { name = "pytest", specifier = ">=9.1.1" },
     { name = "ruff", specifier = ">=0.17.1" },
+    { name = "streamlit", specifier = ">=1.66.0" },
 ]
 
 [[package]]

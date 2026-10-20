@@ -78,6 +78,17 @@ uv run hedgefund scan --universe my.yaml --source csv --csv-dir data/   # your o
 uv run hedgefund report 20260101T120000Z_us_etfs         # rewrite jobs/<run-id>/html/ from the cached run
 ```
 
+## Dashboard
+
+`hedgefund dashboard` opens the optional Streamlit app over the runs under `jobs/`. It reads only the cached scan output and makes no network calls: the server binds `localhost` only, sends no telemetry, and skips Streamlit's startup IP lookups and email prompt. The same settings live in `.streamlit/config.toml` so a direct `uv run streamlit run dashboard/app.py` behaves the same way. Install the extra first with `uv sync --extra dashboard`.
+
+```
+uv run hedgefund dashboard                              # http://localhost:8501 over ./jobs
+uv run hedgefund dashboard --jobs-dir /path/to/jobs     # another runs directory (passed via HEDGEFUND_JOBS_DIR)
+uv run hedgefund dashboard --port 8600 --headless       # no browser; for servers and CI
+uv run hedgefund dashboard --json                       # dry run: print the command, launch nothing
+```
+
 `--universe` is a name under `config/universes/` or a path to a YAML file with `name`, `cost_profile` and `symbols`; the cost profile comes from that file. The analysis flags of `analyze` (`--window`, `--threshold`, `--min-train`, `--no-hmm`, `--null-paths`, `--seed`, `--refit`, `--rule`, ...) apply to every symbol. `--no-html` skips the report.
 
 Layout written by a scan:
@@ -121,7 +132,7 @@ hedgeFund/
 │   ├── regime/              # labels, markov, signal, hmm, stats (pure functions, no I/O)
 │   ├── backtest/            # walk_forward, costs, metrics, benchmarks
 │   ├── report/              # json_contract, terminal, html
-│   ├── cli.py               # hedgefund analyze | backtest | scan | report | daily | propose
+│   ├── cli.py               # hedgefund analyze | backtest | scan | report | daily | propose | dashboard
 │   ├── jobs/                # daily job, webhook run summaries
 │   └── paper/               # sizing helper: signal -> printed proposal, never an order
 ├── skills/regime/           # Claude Code skill wrapping the CLI
